@@ -5,7 +5,7 @@
 |---|---|
 | Preprocessing, segmentation | (name) |
 | Classification | (name) |
-| Explainability (Grad-CAM, retrieval), repo | (name) |
+| Explainability (Grad-CAM, retrieval), repo | Hrihaan Maruti Gudulkar |
 | Report, dashboard | (shared) |
 
 ## Working rules
