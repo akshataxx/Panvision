@@ -1,6 +1,7 @@
 # Data and models (too large for GitHub)
 data/*
 !data/README.md
+!data/splits.csv
 models/
 *.nii
 *.nii.gz
