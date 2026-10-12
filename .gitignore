@@ -1,0 +1,27 @@
+# Data and models (too large for GitHub)
+data/*
+!data/README.md
+models/
+*.nii
+*.nii.gz
+*.mha
+*.mhd
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# Outputs
+outputs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
