@@ -3,10 +3,6 @@
 Code and the agreed patient split live on GitHub. Large CT files, masks, and
 processed outputs live in the team's shared **OneDrive / PanVisionData** folder.
 
-**Shared folder link: NOT ADDED YET.** Miti must add the OneDrive sharing link here
-and grant teammates access. A GitHub repository URL does not grant OneDrive access.
-Use the team folder with access restricted to the intended collaborators.
-
 ## Access the data
 
 1. Request the PanVisionData OneDrive invitation from Miti if the link is absent
@@ -87,23 +83,9 @@ manifests are relative to PanVisionData, as their columns declare; the earlier
 exploration manifest has machine-specific absolute paths and should be regenerated
 locally if needed. No raw CT download is needed merely to use processed model inputs.
 
-## Team ownership and local disk space
-
-Miti runs the full-dataset writer; teammates consume completed outputs. Avoid
-running another full-dataset writer against the same shared folder. Do not rename,
-edit, or delete shared study files while processing is running.
-
-Cloud capacity does not increase local disk capacity. After OneDrive confirms
-uploads are complete, use its **Free Up Space** action for completed files you
-do not currently need locally. Deleting a synced file deletes the shared copy too.
-
 ## Source and Git rules
 
 - Official dataset: https://zenodo.org/records/13715870 (batch 1; four batches total).
 - Selected-scan mirror: https://huggingface.co/datasets/MedOtter/PANORAMA.
 - Official annotations: https://github.com/DIAGNijmegen/panorama_labels.
 - Follow source attribution and CC BY-NC 4.0 terms.
-
-`data/splits.csv` and this README are tracked by Git. Machine-local settings,
-scans, manifests, and outputs under `data/` remain ignored. Do not upload scans,
-masks, credentials, or private clinical metadata to the GitHub repository.
