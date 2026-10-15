@@ -6,26 +6,6 @@ are for the person downloading and preparing the dataset.
 
 Run commands in **Terminal > New Terminal** from the PanVision folder on `data`.
 
-## OneDrive or other shared storage
-
-Set a machine-local root in `data/storage.json` (ignored by Git):
-
-```json
-{"data_root": "/absolute/path/to/OneDrive/PanVisionData"}
-```
-
-The VS Code tasks and CLI then use `<root>/raw/images`, `<root>/raw/annotations`,
-`<root>/manifests/manifest.csv`, and `<root>/processed`. Explicit CLI paths override
-these defaults. `PANVISION_DATA_DIR` can override the configured root. Without
-either setting, the original project-local `data/` layout is used. Each teammate
-sets their own root and generates their own manifest because paths are absolute.
-The shared patient split remains `data/splits.csv` in the Git workspace.
-
-Cloud storage does not increase local free disk space. A download into the synced
-folder first occupies local storage. Process manageable batches, allow uploads to
-finish, and use OneDrive's **Free Up Space** action when safe. Deleting a synced
-file removes the cloud copy too. Files must be downloaded locally again to process.
-Only one team member should write a given processed study directory at a time.
 
 ## Setup
 
