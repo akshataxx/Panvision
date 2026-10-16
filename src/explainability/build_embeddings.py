@@ -10,7 +10,7 @@ Uses the STAND-IN model for now, so the fingerprints are NOT medically meaningfu
 The aim is to prove the plumbing works; swap in the real classifier later.
 
 Run from the repo root:
-    python src/explainability/build_embeddings.py "C:\\Users\\amg_h\\Documents\\panvision_samples"
+    python src/explainability/build_embeddings.py "C:\path\to\panvision_samples"
 
 Output: outputs/embeddings.npz (the "outputs" folder is ignored by Git)
 """
