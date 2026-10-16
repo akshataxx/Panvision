@@ -2,7 +2,8 @@
 
 Uses the STAND-IN model (see standin_model.py), so the heat map is NOT meaningful
 medically. The point is to prove the whole chain works on real PanVision data:
-CT slice -> pancreas crop -> model input -> Grad-CAM heat map -> overlay.
+CT slice -> pancreas crop -> model input -> Grad-CAM heat map -> keep only the heat
+inside the pancreas -> overlay.
 
 Run from the repo root:
     python src/explainability/crop_gradcam_scan.py "C:\\panvision_samples\\100000_00001"
@@ -20,11 +21,10 @@ import numpy as np
 import torch
 from matplotlib.patches import Rectangle
 from PIL import Image
-from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
-from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 
-# These two live in the same folder as this script.
+# These live in the same folder as this script.
+from gradcam import generate_heatmap, restrict_to_mask
 from standin_model import StandInClassifier
 from view_scan import PATTERNS, find_file, load_volume
 
@@ -78,6 +78,10 @@ def main():
     rgb = np.stack([gray, gray, gray], axis=-1)  # models expect 3 colour channels
     x = torch.from_numpy(((rgb - MEAN) / STD).transpose(2, 0, 1)).unsqueeze(0).float()
 
+    # The pancreas mask, cropped and resized the same way (nearest-neighbour keeps it 0/1).
+    mask_img = Image.fromarray(pancreas[z, r0:r1, c0:c1].astype(np.uint8) * 255)
+    mask_small = np.asarray(mask_img.resize((224, 224), Image.Resampling.NEAREST)) > 0
+
     # 4. Run the stand-in model.
     model = StandInClassifier()
     with torch.no_grad():
@@ -86,22 +90,26 @@ def main():
     print(f"Stand-in scores  non-PDAC {probs[0]:.2f}  PDAC {probs[1]:.2f}  (random head: meaningless)")
     print(f"Embedding (the fingerprint) has {emb.numel()} numbers")
 
-    # 5. Grad-CAM for the PDAC output (class 1).
-    cam = GradCAM(model=model, target_layers=[model.gradcam_layer])
-    heat = cam(input_tensor=x, targets=[ClassifierOutputTarget(1)])[0]
-    overlay = show_cam_on_image(rgb, heat, use_rgb=True)
+    # 5. Grad-CAM for the PDAC output (class 1), then keep only heat inside the pancreas.
+    heat = generate_heatmap(model, x, model.gradcam_layer, target_class=1)
+    heat_in, inside = restrict_to_mask(heat, mask_small)
+    print(f"Share of the heat that fell inside the pancreas: {inside:.0%}")
+    overlay = show_cam_on_image(rgb, heat_in, use_rgb=True)
 
-    # 6. Draw four panels: whole slice with crop box, the crop, heat map, overlay.
-    fig, axes = plt.subplots(1, 4, figsize=(16, 4.5))
+    # 6. Draw five panels.
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4.5))
     axes[0].imshow(ct[z], cmap="gray", vmin=0, vmax=1)
     axes[0].add_patch(Rectangle((c0, r0), c1 - c0, r1 - r0, fill=False, edgecolor="yellow", lw=2))
     axes[0].set_title(f"Slice {z} with crop box")
     axes[1].imshow(rgb)
-    axes[1].set_title("Pancreas crop (model input)")
+    axes[1].contour(mask_small, levels=[0.5], colors="lime", linewidths=1.5)
+    axes[1].set_title("Crop (model input), pancreas outlined")
     axes[2].imshow(heat, cmap="jet", vmin=0, vmax=1)
-    axes[2].set_title("Grad-CAM heat map")
-    axes[3].imshow(overlay)
-    axes[3].set_title("Overlay")
+    axes[2].set_title("Raw Grad-CAM heat map")
+    axes[3].imshow(heat_in, cmap="jet", vmin=0, vmax=1)
+    axes[3].set_title(f"Heat inside pancreas only ({inside:.0%} kept)")
+    axes[4].imshow(overlay)
+    axes[4].set_title("Overlay (pancreas only)")
     for ax in axes:
         ax.axis("off")
     fig.suptitle("STAND-IN model: heat map is not medically meaningful", color="red")
