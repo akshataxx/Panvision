@@ -23,7 +23,8 @@ def find_studies(root=None, splits_path='data/splits.csv'):
     root = Path(root) if root else data_root()
     frames = []
     for manifest in sorted((root / 'processed/full').glob('*/volumes/manifest.csv')):
-        if not (manifest.parents[1] / 'complete.json').exists():
+        # Skip half-copied '.partial-*' folders left by an interrupted upload, and anything without a receipt.
+        if manifest.parents[1].name.startswith('.') or not (manifest.parents[1] / 'complete.json').exists():
             continue
         frame = pd.read_csv(manifest, dtype=str, keep_default_na=False)
         for column in ('processed_image', 'processed_labels'):

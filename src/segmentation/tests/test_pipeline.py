@@ -27,6 +27,11 @@ class DataTests(unittest.TestCase):
         self.assertEqual(sorted(positives.study_id), ['100_1', '101_1'])  # automatic lesion mask excluded
         self.assertEqual(negatives.study_id.tolist(), ['103_1'])
 
+    def test_interrupted_copy_is_ignored(self):
+        import shutil
+        shutil.copytree(self.root / 'processed/full/100_1', self.root / 'processed/full/.partial-100_1')
+        self.assertEqual(len(find_studies(self.root, self.splits)), 7)
+
     def test_split_disagreement_fails(self):
         frame = pd.read_csv(self.splits, dtype=str)
         frame.loc[frame.patient_id == '100', 'split'] = 'test'
