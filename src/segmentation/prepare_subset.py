@@ -5,8 +5,9 @@ Each selected study is downloaded to fast local disk, processed with src.preproc
 <shared>/processed/full/<study_id>, and its raw CT is deleted. Re-running skips studies already complete in the
 shared folder, so the team's full run will also recognise these outputs as complete.
 
-    python -m src.segmentation.prepare_subset --shared /content/data --train 300 --val 80 --test 80 --dry-run
-    python -m src.segmentation.prepare_subset --shared /content/data --train 300 --val 80 --test 80
+    git clone --depth 1 https://github.com/DIAGNijmegen/panorama_labels.git /content/panorama_labels
+    python -m src.segmentation.prepare_subset --shared /content/data --annotations /content/panorama_labels --dry-run
+    python -m src.segmentation.prepare_subset --shared /content/data --annotations /content/panorama_labels
 
 Selection per split: half PDAC with a *manual* lesion mask (needed for lesion supervision/evaluation), half
 non-PDAC, sampled with a fixed seed.
@@ -55,7 +56,9 @@ def signature_for(root, clinical, split_path, revision):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--shared', required=True, help='shared PanVisionData folder (contains raw/annotations)')
+    parser.add_argument('--shared', required=True, help='shared PanVisionData folder (outputs go to processed/full)')
+    parser.add_argument('--annotations', default=None,
+                        help='panorama_labels checkout; default <shared>/raw/annotations')
     parser.add_argument('--work', default='/content/pv', help='fast local scratch root')
     parser.add_argument('--splits', default='data/splits.csv')
     parser.add_argument('--train', type=int, default=300)
@@ -67,14 +70,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     shared, work = Path(args.shared), Path(args.work)
-    annotations = shared / 'raw/annotations'
+    annotations = Path(args.annotations) if args.annotations else shared / 'raw/annotations'
     clinical = annotations / 'clinical_information.xlsx'
     missing = [p.name for p in (clinical, annotations / 'manual_labels', annotations / 'automatic_labels')
                if not p.exists()]
     if missing:
         listing = sorted(p.name + ('/' if p.is_dir() else '') for p in annotations.iterdir()) if annotations.exists() else []
         raise SystemExit(f'{annotations} is missing {missing}. It contains: {listing}. '
-                         'Expected the official DIAGNijmegen/panorama_labels layout.')
+                         'Clone https://github.com/DIAGNijmegen/panorama_labels and pass --annotations <path>.')
     split_path = Path(args.splits).resolve()
     cohort = clinical_cohort(clinical)
     splits = pd.read_csv(split_path, dtype=str, keep_default_na=False)
