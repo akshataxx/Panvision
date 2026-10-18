@@ -7,6 +7,8 @@ nibabel
 SimpleITK
 torch
 torchvision
+monai
+scipy
 grad-cam
 streamlit
 jinja2
