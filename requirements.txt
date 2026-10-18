@@ -13,3 +13,5 @@ grad-cam
 streamlit
 jinja2
 jupyter
+openpyxl
+huggingface_hub
