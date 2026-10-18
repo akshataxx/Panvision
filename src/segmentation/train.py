@@ -102,6 +102,7 @@ def train(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = get_device()
+    print(f'Device: {torch.cuda.get_device_name() if device.type == "cuda" else device.type}', flush=True)
     run_dir = Path(args.out) / args.run
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / 'config.json').write_text(json.dumps(vars(args), indent=2) + '\n')
