@@ -1,5 +1,8 @@
-import streamlit as st
+"""Run with: python -m streamlit run app/app.py."""
+import sys
+from pathlib import Path
 
-st.title("PanVision")
-st.caption("Academic research prototype. Not for clinical use.")
-st.write("Dashboard coming soon.")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.dashboard import main
+
+main()

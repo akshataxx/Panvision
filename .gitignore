@@ -26,3 +26,8 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local database credentials
+.env
+.env.*
+.streamlit/secrets.toml
