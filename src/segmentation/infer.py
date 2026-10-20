@@ -104,19 +104,26 @@ class LesionSegmentor(_Segmentor):
         super().__init__(checkpoint, device, threshold)
         self.min_voxels, self.margin_mm = min_voxels, margin_mm
 
+    def predict_probabilities(self, image, pancreas, spacing_xyz):
+        """Return foreground probabilities and their ROI; compute inference once for threshold sweeps."""
+        if self.roi_mode == 'none':
+            return predict_probs(self.model, image, self.context, self.patch, self.device), None
+        roi = make_roi(largest_component(pancreas), spacing_xyz, self.patch, self.margin_mm)
+        if roi is None:
+            return None, None
+        return predict_probs(self.model, crop(image, roi), self.context, self.patch, self.device), roi
+
     def predict(self, image, pancreas, spacing_xyz):
         """(lesion mask, ROI or None). Only the pancreas ROI is searched; no pancreas means no lesion.
 
         The no-ROI baseline (roi='none') searches every full slice and ignores the pancreas mask.
         """
-        if self.roi_mode == 'none':
-            probs = predict_probs(self.model, image, self.context, self.patch, self.device)
-            return remove_small(probs >= self.threshold, self.min_voxels), None
-        roi = make_roi(largest_component(pancreas), spacing_xyz, self.patch, self.margin_mm)
-        if roi is None:
+        probs, roi = self.predict_probabilities(image, pancreas, spacing_xyz)
+        if probs is None:
             return np.zeros(image.shape, dtype=bool), None
-        probs = predict_probs(self.model, crop(image, roi), self.context, self.patch, self.device)
         mask = remove_small(probs >= self.threshold, self.min_voxels)
+        if roi is None:
+            return mask, None
         return paste(mask, roi, image.shape).astype(bool), roi
 
 
@@ -130,7 +137,8 @@ def export(args):
     studies = find_studies(args.data_root, args.splits)
     rows = studies[studies.split.isin(args.split)]
     pancreas = pancreas_source(args.pancreas_checkpoint, args.pancreas_predictions)
-    lesion = LesionSegmentor(args.lesion_checkpoint)
+    lesion = LesionSegmentor(args.lesion_checkpoint, threshold=args.lesion_threshold,
+                            min_voxels=args.lesion_min_voxels)
     out = Path(args.out)
     records = []
     for row, case in zip(rows.itertuples(index=False), iter_cases(rows)):
@@ -156,6 +164,8 @@ def main(argv=None):
     parser.add_argument('--pancreas-checkpoint', default=None)
     parser.add_argument('--pancreas-predictions', default=None, help='folder of nnU-Net pancreas masks instead')
     parser.add_argument('--lesion-checkpoint', required=True)
+    parser.add_argument('--lesion-threshold', type=float, default=0.5)
+    parser.add_argument('--lesion-min-voxels', type=int, default=10)
     parser.add_argument('--split', nargs='+', default=['train', 'val', 'test'])
     parser.add_argument('--data-root', default=None)
     parser.add_argument('--splits', default='data/splits.csv')

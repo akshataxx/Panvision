@@ -6,6 +6,7 @@ import pandas as pd
 from src.segmentation.measure import lesion_measurements, location
 from src.segmentation.metrics import overlap, paired_wilcoxon, summarize
 from src.segmentation.roi import crop, largest_component, make_roi, paste, remove_small
+from src.segmentation.tune import score_mask
 
 
 class RoiTests(unittest.TestCase):
@@ -50,6 +51,20 @@ class MetricTests(unittest.TestCase):
         self.assertAlmostEqual(summary.loc[0, 'mean'], a.dice.mean())
         self.assertLessEqual(summary.loc[0, 'ci_low'], summary.loc[0, 'ci_high'])
         self.assertAlmostEqual(paired_wilcoxon(a, b, 'dice')['mean_diff'], 0.1)
+
+    def test_tuning_counts_lesion_outside_roi_as_missed(self):
+        reference = np.zeros((2, 4, 4), bool)
+        reference[0, 0, 0] = True
+        reference[1, 3, 3] = True  # outside the crop
+        roi = make_roi(np.pad(np.ones((1, 2, 2), bool), ((0, 1), (0, 2), (0, 2))),
+                       (1, 1, 1), size=2, margin_mm=0)
+        predicted_crop = crop(reference, roi)
+        valid_crop = crop(np.ones(reference.shape, bool), roi)
+        result = score_mask(predicted_crop, predicted_crop, valid_crop, int(reference.sum()))
+        full_prediction = paste(predicted_crop, roi, reference.shape)
+        expected = overlap(full_prediction, reference)
+        for metric in ('dice', 'iou', 'recall'):
+            self.assertAlmostEqual(result[metric], expected[metric])
 
 
 class MeasureTests(unittest.TestCase):

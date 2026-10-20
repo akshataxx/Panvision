@@ -88,6 +88,9 @@ def main(argv=None):
         p.add_argument('--name', default=None, help='results file prefix; default: the checkpoint run folder')
         p.add_argument('--split', default='val', choices=['val', 'test'])
         p.add_argument('--max-studies', type=int, default=0, help='0 = all (lesion: positives)')
+        if name == 'lesion':
+            p.add_argument('--lesion-threshold', type=float, default=0.5)
+            p.add_argument('--lesion-min-voxels', type=int, default=10)
         p.add_argument('--data-root', default=None)
         p.add_argument('--splits', default='data/splits.csv')
         p.add_argument('--out', default=None)
@@ -124,7 +127,8 @@ def main(argv=None):
         rows = evaluation_rows(studies, 'lesion', args.split, args.max_studies, args.max_negatives)
         pancreas = (pancreas_source(args.pancreas_checkpoint, args.pancreas_predictions)
                     if args.pancreas_checkpoint or args.pancreas_predictions else None)
-        frame = evaluate_lesion(LesionSegmentor(args.checkpoint), iter_cases(rows), pancreas)
+        frame = evaluate_lesion(LesionSegmentor(args.checkpoint, threshold=args.lesion_threshold,
+                                               min_voxels=args.lesion_min_voxels), iter_cases(rows), pancreas)
         summary = lesion_summary(frame)
     name = args.name or Path(args.checkpoint or args.predictions).parent.name
     stem = out / f'{name}_{args.split}'

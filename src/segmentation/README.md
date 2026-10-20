@@ -26,3 +26,22 @@ lesion, roi = LesionSegmentor('.../L2_attention_unet_roi/best.pt').predict(image
 ```
 
 Tests: `python -m unittest discover -s src/segmentation/tests -t .`
+
+## Exploratory lesion postprocessing tuning
+
+After the original test evaluation, the selected L2 model showed a high non-PDAC false-positive rate.
+`colab_segmentation.ipynb` cell 20 sweeps probability thresholds and minimum connected-component sizes on
+**validation cases only**, running the network once per study. The default (0.5, 10 voxels) reproduces the
+original postprocessing. The table reports positive-case Dice, IoU, recall and detection rate, alongside the
+negative-case false-positive rate. Raising a threshold or size can remove false positives but also small real lesions.
+
+```bash
+python -m src.segmentation.tune \
+  --checkpoint /content/data/models/segmentation/L2_attention_unet_roi/best.pt \
+  --pancreas-predictions /content/data/outputs/segmentation/nnunet/predictions
+```
+
+The per-case and summary CSVs go to `outputs/segmentation/results/`. If a validation-chosen setting warrants an
+exploratory export, pass `--lesion-threshold` and `--lesion-min-voxels` to `src.segmentation.infer`, and choose a
+separate `--out` folder to preserve the original masks. The original test has already been viewed; any subsequent
+test result for a changed setting is exploratory rather than a new untouched holdout result.
