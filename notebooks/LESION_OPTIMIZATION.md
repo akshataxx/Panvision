@@ -1,0 +1,13 @@
+# Isolated lesion experiments
+
+Open `colab_lesion_optimization.ipynb` to train L4 (negative sampling), L5 (strong CT intensity augmentation),
+or L6 (lower OneCycle peak learning rate). The notebook uses `src.segmentation.train_experiments` and
+`src.segmentation.experimental_data`; the original training module and `colab_segmentation.ipynb` are unchanged.
+
+Each experiment has a separate run directory under `models/segmentation`, so the saved L2 checkpoint is preserved.
+The notebook compares all candidates with L2 on the same validation studies and reports positive-case Dice,
+recall, detection, and non-PDAC false-positive rate. None of the new runs has been trained yet. Because the
+original test set has already been viewed, use validation results to choose among these experiments.
+
+The notebook setup cell clones the `segmentation` branch from GitHub. Put the new notebook and experimental
+modules on that branch before launching a Colab runtime.
