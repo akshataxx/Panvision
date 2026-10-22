@@ -11,3 +11,8 @@ original test set has already been viewed, use validation results to choose amon
 
 The notebook setup cell clones the `segmentation` branch from GitHub. Put the new notebook and experimental
 modules on that branch before launching a Colab runtime.
+
+The final notebook section also tests a **no-training L2 + L5 ensemble**. It averages the saved models' voxel
+probabilities and compares L2, L5, and the ensemble on identical validation scans and postprocessing settings.
+It records Dice, recall, detection, false-positive rate, and mean absolute volume and axial-diameter errors.
+The source checkpoints and original result files are not overwritten.
