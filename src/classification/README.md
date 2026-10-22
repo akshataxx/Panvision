@@ -10,10 +10,13 @@ Save the trained model so that `src/explainability` can load it (see TEAM_GUIDE.
 - `evaluation.py`: shared scoring; averages slice scores into one score per patient, then reports AUC, sensitivity, specificity
 - `view_crops.py`: draws the crops of one study, to check the cropping by eye
 - `crops_summary.py`: counts patients, studies and pictures per split and label
+- `compare_aggregations.py`: tries different ways of turning slice scores into one patient score, on the validation patients only
+- `evaluate_model.py`: final scoring of a trained model on the validation or test patients; the cut-off comes from validation, and it writes one score per patient to a CSV
 
 ## How to run
 1. `python src/classification/make_crops.py <folder of processed studies> --out outputs/crops`
 2. `python src/classification/crops_summary.py outputs/crops` (check the counts)
 3. `python src/classification/train_resnet.py --crops outputs/crops` (needs a GPU, e.g. Colab)
+4. `python src/classification/evaluate_model.py --model models/classifier.pt --crops outputs/crops --split test --aggregation mean` (run once, at the very end)
 
 Choose settings on the validation patients; look at the test patients once, at the end.
