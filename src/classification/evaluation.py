@@ -4,6 +4,13 @@ The label belongs to a patient, not to a slice. So the model's scores for all of
 patient's slices are averaged into ONE score per patient, and everything below is
 measured per patient.
 
+How a patient's slice scores are combined ("aggregation"):
+  mean       average of all slices (the default; a tumour on a few slices gets diluted)
+  max        the single most suspicious slice
+  topk:K     average of the K most suspicious slices, for example topk:5
+  frac:F     average of the most suspicious fraction F of slices, for example frac:0.2
+Choose the rule on the VALIDATION patients, then keep it fixed for the test patients.
+
 Rules for a fair comparison:
   * choose settings (epochs, threshold ...) on the VALIDATION patients only;
   * look at the TEST patients once, at the very end.
@@ -12,20 +19,36 @@ import numpy as np
 from sklearn.metrics import roc_auc_score, roc_curve
 
 
-def patient_scores(probs, patient_idx, patient_labels):
-    """Average slice scores into one score per patient.
+def patient_scores(probs, patient_idx, patient_labels, method="mean"):
+    """Combine slice scores into one score per patient.
 
     probs: PDAC probability of every picture;  patient_idx: patient number of every picture;
-    patient_labels: label (0/1) of every patient. Returns (score per patient, label per patient).
+    patient_labels: label (0/1) of every patient;  method: see the list at the top of this file.
+    Returns (score per patient, label per patient).
     """
     probs = np.asarray(probs, dtype=float)
     patient_idx = np.asarray(patient_idx, dtype=int)
     patient_labels = np.asarray(patient_labels, dtype=int)
-    n = len(patient_labels)
-    sums = np.bincount(patient_idx, weights=probs, minlength=n)
-    counts = np.bincount(patient_idx, minlength=n)
-    seen = counts > 0  # ignore any patient who has no pictures
-    return sums[seen] / counts[seen], patient_labels[seen]
+    scores, labels = [], []
+    for p in range(len(patient_labels)):
+        s = probs[patient_idx == p]
+        if len(s) == 0:
+            continue  # ignore any patient who has no pictures
+        if method == "mean":
+            value = s.mean()
+        elif method == "max":
+            value = s.max()
+        elif method.startswith("topk:"):
+            k = max(1, int(method.split(":")[1]))
+            value = np.sort(s)[-k:].mean()
+        elif method.startswith("frac:"):
+            k = max(1, int(np.ceil(float(method.split(":")[1]) * len(s))))
+            value = np.sort(s)[-k:].mean()
+        else:
+            raise ValueError(f"Unknown aggregation method: {method}")
+        scores.append(value)
+        labels.append(patient_labels[p])
+    return np.array(scores), np.array(labels)
 
 
 def pick_threshold(scores, labels):
@@ -38,13 +61,13 @@ def pick_threshold(scores, labels):
     return float(thresholds[best])
 
 
-def evaluate_patients(probs, patient_idx, patient_labels, threshold=0.5):
+def evaluate_patients(probs, patient_idx, patient_labels, threshold=0.5, aggregation="mean"):
     """Per-patient results: AUC, sensitivity, specificity, accuracy.
 
     AUC: 0.5 = coin flip, 1.0 = perfect. Sensitivity = share of PDAC patients caught.
     Specificity = share of non-PDAC patients correctly cleared.
     """
-    scores, y = patient_scores(probs, patient_idx, patient_labels)
+    scores, y = patient_scores(probs, patient_idx, patient_labels, aggregation)
     predicted = scores >= threshold
     positives, negatives = y == 1, y == 0
     return {
@@ -62,6 +85,24 @@ def format_metrics(m):
     return (f"AUC {m['auc']:.3f} | sensitivity {m['sensitivity']:.2f} | "
             f"specificity {m['specificity']:.2f} | accuracy {m['accuracy']:.2f} "
             f"(threshold {m['threshold']:.2f}, {m['n_patients']} patients, {m['n_pdac']} PDAC)")
+
+
+def bootstrap_auc_ci(scores, labels, n_resamples=1000, seed=0):
+    """95% range for the AUC, by re-drawing the patients with replacement many times.
+
+    With few patients the AUC wobbles depending on which patients happen to be in the set.
+    If two models' ranges overlap a lot, we cannot say one is really better.
+    Returns (low, high).
+    """
+    scores, labels = np.asarray(scores, dtype=float), np.asarray(labels, dtype=int)
+    rng = np.random.default_rng(seed)
+    aucs = []
+    for _ in range(n_resamples):
+        pick = rng.integers(0, len(labels), len(labels))
+        if labels[pick].min() == labels[pick].max():
+            continue  # this draw happened to contain only one class; AUC is undefined
+        aucs.append(roc_auc_score(labels[pick], scores[pick]))
+    return float(np.percentile(aucs, 2.5)), float(np.percentile(aucs, 97.5))
 
 
 def predict_probs(model, dataset, device, batch_size=64, workers=0):
