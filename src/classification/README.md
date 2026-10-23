@@ -20,3 +20,6 @@ Save the trained model so that `src/explainability` can load it (see TEAM_GUIDE.
 4. `python src/classification/evaluate_model.py --model models/classifier.pt --crops outputs/crops --split test --aggregation mean` (run once, at the very end)
 
 Choose settings on the validation patients; look at the test patients once, at the end.
+
+
+CNN and DenseNet research experiments are documented in [research/classification](../../research/classification/README.md).

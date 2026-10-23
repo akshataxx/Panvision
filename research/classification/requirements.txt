@@ -1,0 +1,6 @@
+numpy
+pandas
+pillow
+scikit-learn
+torch>=2.6
+torchvision>=0.21
