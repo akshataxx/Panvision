@@ -1,0 +1,12 @@
+streamlit>=1.49,<2
+numpy
+pandas
+SimpleITK
+pillow
+reportlab>=4,<6
+psycopg[binary]>=3.2,<4
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
+email-validator>=2,<3
+python-multipart>=0.0.18
