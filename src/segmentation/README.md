@@ -14,7 +14,8 @@ Two-stage cascade on preprocessed volumes (`src/preprocessing`): Stage 1 pancrea
 - No flip augmentation (pancreas is not left-right symmetric), also disabled for nnU-Net.
 
 Train/evaluate on Colab: `notebooks/colab_segmentation.ipynb` (P1, P2, L0-L3, selection, test, export) and
-`notebooks/colab_nnunet.ipynb` (P3). Outputs in the shared data folder:
+`notebooks/colab_nnunet.ipynb` (P3). P3 pancreas masks for every scan, split across Colab accounts:
+`notebooks/colab_pancreas_all.ipynb` (`src/segmentation/nnunet_predict.py`). Outputs in the shared data folder:
 `models/segmentation/<run>/best.pt`, `outputs/segmentation/<study_id>/{pancreas,lesion}.nii.gz`, `roi.json`,
 `outputs/segmentation/measurements.csv`, `outputs/segmentation/results/*.csv`.
 
