@@ -1,7 +1,7 @@
 """Bridge to nnU-Net v2 for the P3 pancreas candidate, using the same patients and evaluation as P1/P2.
 
     python -m src.segmentation.nnunet_export install-trainer
-    python -m src.segmentation.nnunet_export dataset --raw $nnUNet_raw
+    python -m src.segmentation.nnunet_export dataset --raw $nnUNet_raw   # --max-train 0: every train study
     nnUNetv2_plan_and_preprocess -d 501 -c 2d -np 2
     python -m src.segmentation.nnunet_export splits --raw $nnUNet_raw --preprocessed $nnUNet_preprocessed
     nnUNetv2_train 501 2d 0 -tr nnUNetTrainer_PanVision --c
@@ -17,6 +17,7 @@ differs only in the method.
 import argparse
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -71,7 +72,8 @@ def dataset(args):
     (root / 'imagesTr').mkdir(parents=True, exist_ok=True)
     (root / 'labelsTr').mkdir(parents=True, exist_ok=True)
     rows = pd.concat([train, val])
-    for number, row in enumerate(rows.itertuples(index=False), 1):
+
+    def export_case(row):
         _copy_image(row, root / 'imagesTr')
         label_path = root / 'labelsTr' / f'{row.study_id}.nii.gz'
         if not label_path.exists():
@@ -79,8 +81,12 @@ def dataset(args):
             binary = sitk.GetImageFromArray(pancreas_target(sitk.GetArrayFromImage(labels)).astype(np.uint8))
             binary.CopyInformation(labels)
             sitk.WriteImage(binary, str(label_path))
-        if number % 25 == 0:
-            print(f'{number}/{len(rows)} cases exported', flush=True)
+
+    # Reads from Drive dominate, so several cases are fetched at once.
+    with ThreadPoolExecutor(args.workers) as pool:
+        for number, _ in enumerate(pool.map(export_case, rows.itertuples(index=False)), 1):
+            if number % 25 == 0:
+                print(f'{number}/{len(rows)} cases exported', flush=True)
     (root / 'dataset.json').write_text(json.dumps({
         'channel_names': {'0': 'CT'}, 'labels': {'background': 0, 'pancreas': 1},
         'numTraining': len(rows), 'file_ending': '.nii.gz',
@@ -129,6 +135,7 @@ def main(argv=None):
         if name == 'dataset':  # defaults match src.segmentation.train
             p.add_argument('--max-train', type=int, default=250)
             p.add_argument('--max-val', type=int, default=30)
+            p.add_argument('--workers', type=int, default=8, help='cases copied from Drive at once')
         if name == 'splits':
             p.add_argument('--preprocessed', required=True)
         if name == 'inputs':

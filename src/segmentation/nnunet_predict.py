@@ -34,6 +34,7 @@ def main(argv=None):
     parser.add_argument('--model', required=True, help='nnU-Net trainer folder containing plans.json and fold_0/')
     parser.add_argument('--shard', type=int, default=0, help="this session's shard, 0-based")
     parser.add_argument('--num-shards', type=int, default=1)
+    parser.add_argument('--split', nargs='+', default=['train', 'val', 'test'])
     parser.add_argument('--chunk', type=int, default=50, help='studies per nnU-Net call')
     parser.add_argument('--workers', type=int, default=2, help='nnU-Net preprocessing/export processes')
     parser.add_argument('--work', default='/content/nnunet/full_predictions', help='fast local scratch')
@@ -50,6 +51,7 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     print('Finding studies (a few minutes on Drive)...', flush=True)
     studies = find_studies(root, args.splits)
+    studies = studies[studies.split.isin(args.split)]
     mine = shard_rows(studies, args.shard, args.num_shards)
     rows = shard_rows(studies, args.shard, args.num_shards, predicted(out))
     print(f'Shard {args.shard + 1}/{args.num_shards}: {len(mine)} studies; already predicted: '
