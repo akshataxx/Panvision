@@ -109,3 +109,36 @@ def precision_at_k(index, k=3):
         "pdac_precision": float(hits[is_pdac].mean()) if is_pdac.any() else None,
         "pdac_random_baseline": float(baselines[is_pdac].mean()) if is_pdac.any() else None,
     }
+
+def precision_at_k_queries(index, query_embeddings, query_labels, k=3):
+    """Score retrieval for patients who are NOT in the database (e.g. validation patients).
+
+    index:            built from TRAINING patients only (see build_index)
+    query_embeddings: (Q, 512) one fingerprint per query patient
+    query_labels:     (Q,) 0/1 label of every query patient
+    Precision@k = share of the k neighbours that have the same label as the query.
+
+    The random baseline for a query is the share of database patients with the query's
+    own label: that is what you would get by picking k patients blindly.
+    Returns overall numbers and PDAC-only numbers (PDAC is the class that matters most).
+    """
+    query_embeddings = np.asarray(query_embeddings, dtype=np.float32)
+    query_labels = np.asarray(query_labels)
+    db_labels = index["labels"]
+    hits, baselines, any_hit = [], [], []
+    for vector, label in zip(query_embeddings, query_labels):
+        found = top_k(index, vector, k=k)
+        same = [lab == label for _, lab, _ in found]
+        hits.append(np.mean(same))
+        any_hit.append(float(any(same)))
+        baselines.append(np.mean(db_labels == label))
+    hits, baselines, any_hit = np.array(hits), np.array(baselines), np.array(any_hit)
+    pdac = query_labels == 1
+    return {
+        "n_queries": int(len(hits)),
+        "precision": float(hits.mean()),
+        "random_baseline": float(baselines.mean()),
+        "at_least_one_same": float(any_hit.mean()),
+        "pdac_precision": float(hits[pdac].mean()) if pdac.any() else None,
+        "pdac_random_baseline": float(baselines[pdac].mean()) if pdac.any() else None,
+    }

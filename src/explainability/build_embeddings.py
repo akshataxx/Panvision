@@ -1,96 +1,61 @@
-"""Compute one fingerprint (512 numbers) per study and save them to a file.
+"""Compute one fingerprint (512 numbers) per study from the shared crops, using the real classifier.
 
-For every study folder inside the samples folder:
-  1. load the CT and the pancreas mask
-  2. take up to --max-slices slices that clearly contain pancreas
-  3. crop each slice around the pancreas, resize to 224 x 224 (same as crop_gradcam_scan.py)
-  4. run the model and average the slices' fingerprints -> one fingerprint per study
+For every study in every split:
+  1. read its saved crops (made by src/classification/make_crops.py; same pictures the
+     classifier was trained and scored on)
+  2. run the classifier's 512-number layer on every picture
+  3. average the pictures' fingerprints -> one fingerprint per study
 
-Uses the STAND-IN model for now, so the fingerprints are NOT medically meaningful.
-The aim is to prove the plumbing works; swap in the real classifier later.
+Output: outputs/embeddings.npz with study_ids, patient_ids, splits, labels, embeddings.
+retrieval.py later keeps TRAINING patients only as the search database.
 
-Run from the repo root:
-    python src/explainability/build_embeddings.py "C:\path\to\panvision_samples"
-
-Output: outputs/embeddings.npz (the "outputs" folder is ignored by Git)
+Run from the repo root (a GPU, e.g. Colab, makes it much faster; it runs every picture once):
+    python src/explainability/build_embeddings.py --model models/classifier.pt --crops outputs/crops
 """
 import argparse
-import csv
 import os
-from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
 
-# These live in the same folder as this script.
-from crop_gradcam_scan import MEAN, STD, square_crop_box
-from standin_model import StandInClassifier
-from view_scan import PATTERNS, find_file, load_volume
+from model_loader import default_device, load_model, to_model_input
+from dataset import load_cache  # from src/classification (path added by model_loader)
 
 
-def slice_to_tensor(ct2d, mask2d, margin):
-    """Crop one slice around the pancreas -> a (3, 224, 224) model input."""
-    r0, r1, c0, c1 = square_crop_box(mask2d, margin)
-    crop = ct2d[r0:r1, c0:c1]
-    small = Image.fromarray((np.clip(crop, 0, 1) * 255).astype(np.uint8)).resize((224, 224))
-    gray = np.asarray(small, dtype=np.float32) / 255.0
-    rgb = np.stack([gray, gray, gray], axis=-1)
-    return torch.from_numpy(((rgb - MEAN) / STD).transpose(2, 0, 1)).float()
-
-
-def choose_slices(pancreas, max_slices):
-    """Pick slices where the pancreas is clearly visible, spread evenly through the scan."""
-    area = pancreas.sum(axis=(1, 2))  # pancreas pixels on each slice
-    good = np.where(area >= max(50, 0.25 * area.max()))[0]  # skip slices with only a sliver
-    if len(good) > max_slices:
-        good = good[np.linspace(0, len(good) - 1, max_slices).round().astype(int)]
-    return good
+def embed_images(model, images, device, batch_size=64):
+    """Fingerprints for an array of saved crops, in order. Returns (N, 512)."""
+    out = []
+    with torch.no_grad():
+        for start in range(0, len(images), batch_size):
+            x = to_model_input(images[start:start + batch_size]).to(device)
+            out.append(model.embedding(x).cpu().numpy())
+    return np.concatenate(out)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Build one embedding per study")
-    parser.add_argument("samples", help="folder holding one sub-folder per study")
-    parser.add_argument("--splits", default="data/splits.csv")
+    parser.add_argument("--model", default="models/classifier.pt")
+    parser.add_argument("--crops", default="outputs/crops")
     parser.add_argument("--out", default="outputs/embeddings.npz")
-    parser.add_argument("--max-slices", type=int, default=16)
-    parser.add_argument("--margin", type=int, default=16)
     args = parser.parse_args()
 
-    # patient_id -> (split, label) from the team's shared split file
-    info = {}
-    with open(args.splits, newline="") as f:
-        for row in csv.DictReader(f):
-            info[row["patient_id"]] = (row["split"], int(row["label"]))
+    device = default_device()
+    model, notes = load_model(args.model, device)
+    print(f"Model from epoch {notes.get('epoch')} (validation AUC {notes.get('val_auc')}), running on {device}")
 
-    model = StandInClassifier()
     study_ids, patient_ids, splits, labels, vectors = [], [], [], [], []
-
-    for folder in sorted(p for p in Path(args.samples).iterdir() if p.is_dir()):
-        patient_id = folder.name.split("_")[0]
-        image_path = find_file(folder, PATTERNS["image"])
-        pancreas_path = find_file(folder, PATTERNS["pancreas"])
-        if patient_id not in info or image_path is None or pancreas_path is None:
-            print(f"SKIP {folder.name}: missing from splits.csv or no image/pancreas file")
-            continue
-        ct, _ = load_volume(image_path)
-        pancreas = load_volume(pancreas_path)[0] > 0
-        if pancreas.shape != ct.shape or not pancreas.any():
-            print(f"SKIP {folder.name}: pancreas mask missing, empty or wrong shape")
-            continue
-
-        slices = choose_slices(pancreas, args.max_slices)
-        batch = torch.stack([slice_to_tensor(ct[z], pancreas[z], args.margin) for z in slices])
-        with torch.no_grad():
-            study_vector = model.embedding(batch).mean(dim=0).numpy()  # average of the slices
-
-        split, label = info[patient_id]
-        study_ids.append(folder.name)
-        patient_ids.append(patient_id)
-        splits.append(split)
-        labels.append(label)
-        vectors.append(study_vector)
-        print(f"{folder.name}  split={split}  PDAC={label}  slices used={len(slices)}")
+    for split in ["train", "val", "test"]:
+        data = load_cache(args.crops, split, mode="eval")  # every saved slice of every patient
+        print(f"{split}: {len(data['images'])} pictures from {len(data['patient_ids'])} patients")
+        emb = embed_images(model, data["images"], device)
+        picture_study = data["study_ids"]
+        for study in dict.fromkeys(picture_study.tolist()):  # keeps the original order
+            rows = np.where(picture_study == study)[0]
+            study_ids.append(study)
+            patient_ids.append(str(data["patient_ids"][data["patient_idx"][rows[0]]]))
+            splits.append(split)
+            labels.append(int(data["labels"][rows[0]]))
+            vectors.append(emb[rows].mean(axis=0))  # average of the study's pictures
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     np.savez(
