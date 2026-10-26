@@ -16,3 +16,12 @@ The final notebook section also tests a **no-training L2 + L5 ensemble**. It ave
 probabilities and compares L2, L5, and the ensemble on identical validation scans and postprocessing settings.
 It records Dice, recall, detection, false-positive rate, and mean absolute volume and axial-diameter errors.
 The source checkpoints and original result files are not overwritten.
+
+## Pancreas model used for validation
+
+P3 nnU-Net has the highest saved pancreas validation Dice (0.819 over 80 cases, versus 0.783 for P2).
+The experiment notebook now uses P3's saved `outputs/segmentation/nnunet/predictions` masks for every lesion
+comparison and writes result files with a `_P3` suffix, preserving earlier results. The `best.pt` file in the
+P2 folder is only P2's own best checkpoint. P3's trained checkpoint is
+`models/segmentation/P3_nnunet_2d/results/Dataset501_PanVisionPancreas/nnUNetTrainer_PanVision__nnUNetPlans__2d/fold_0/checkpoint_best.pth`;
+nnU-Net also needs the surrounding plans and dataset files when predicting new scans.
