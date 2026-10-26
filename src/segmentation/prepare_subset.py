@@ -10,12 +10,7 @@ shared folder, so the team's full run will also recognise these outputs as compl
     python -m src.segmentation.prepare_subset --shared /content/data --annotations /content/panorama_labels
 
 Selection per split: half PDAC with a *manual* lesion mask (needed for lesion supervision/evaluation), half
-non-PDAC, sampled with a fixed seed. --all selects the whole cohort instead.
-
-Parallel across Colab sessions (e.g. one per teammate, all writing to the same shared Drive folder):
-each session runs the same command with its own --shard; shards are disjoint, deterministic slices.
-
-    python -m src.segmentation.prepare_subset --shared /content/data --annotations /content/panorama_labels --all --shard 0 --num-shards 4
+non-PDAC, sampled with a fixed seed.
 """
 
 import argparse
@@ -71,13 +66,8 @@ def main(argv=None):
     parser.add_argument('--test', type=int, default=80)
     parser.add_argument('--workers', type=int, default=3)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--all', action='store_true', help='whole cohort instead of the balanced subset')
-    parser.add_argument('--shard', type=int, default=0, help='this session\'s shard index, 0-based')
-    parser.add_argument('--num-shards', type=int, default=1)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
-    if args.num_shards < 1 or not 0 <= args.shard < args.num_shards:
-        parser.error('--shard must be in [0, --num-shards)')
 
     shared, work = Path(args.shared), Path(args.work)
     annotations = Path(args.annotations) if args.annotations else shared / 'raw/annotations'
@@ -93,13 +83,7 @@ def main(argv=None):
     splits = pd.read_csv(split_path, dtype=str, keep_default_na=False)
     validate_splits(cohort, splits)
     manual = {p.name.removesuffix('.nii.gz') for p in (annotations / 'manual_labels').glob('*.nii.gz')}
-    if args.all:
-        chosen = cohort.merge(splits[['patient_id', 'split']], on='patient_id', validate='many_to_one')
-        chosen = chosen.sort_values('study_id').reset_index(drop=True)
-    else:
-        chosen = select(cohort, splits, manual, {'train': args.train, 'val': args.val, 'test': args.test}, args.seed)
-    chosen = chosen.iloc[args.shard::args.num_shards]
-    print(f'Shard {args.shard + 1}/{args.num_shards}')
+    chosen = select(cohort, splits, manual, {'train': args.train, 'val': args.val, 'test': args.test}, args.seed)
     print(chosen.groupby(['split', 'label']).size().unstack(fill_value=0).rename(columns={'0': 'non-PDAC', '1': 'PDAC'}))
 
     # Local root mirrors the shared layout. Annotations (~80 MB) are copied, not linked: the preprocessing code
