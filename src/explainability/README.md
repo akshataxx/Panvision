@@ -5,7 +5,8 @@ Grad-CAM heat maps and Top-3 similar-case retrieval, for whichever classifier th
 - Input: a trained classifier saved by `src/classification` (weights plus notes) and the shared crops
   made by `src/classification/make_crops.py` (fixed 144 mm window, 224 x 224).
 - The classifier must offer `embedding(x)` (512 numbers), `forward(x)` (two scores) and `gradcam_layer`
-  (last convolutional block). `model_loader.py` loads it and is the one place to add a new network.
+       (last convolutional block). `model_loader.py` loads ResNet-50, DenseNet-121 or the small CNN from the
+     checkpoint itself and is the one place to add a new network.
 - Retrieval database = training patients only. A query patient never retrieves themselves.
 
 ## Files
