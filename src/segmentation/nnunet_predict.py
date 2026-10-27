@@ -57,7 +57,7 @@ def main(argv=None):
     print(f'Shard {args.shard + 1}/{args.num_shards}: {len(mine)} studies; already predicted: '
           f'{len(mine) - len(rows)}; pending: {len(rows)}', flush=True)
     if args.dry_run or rows.empty:
-        return
+        return int(not rows.empty)  # a dry run fails while masks are pending, so callers can wait for every shard
 
     import torch
     if not torch.cuda.is_available():
@@ -89,4 +89,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
