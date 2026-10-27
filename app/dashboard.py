@@ -277,7 +277,7 @@ def scan_history(admin=False):
 
 def administration():
     heading('Administration', 'Manage doctor access and monitor application tables.')
-    st.caption('This manages PanVision application data. PostgreSQL server administration stays in Azure.')
+    st.caption('This manages PanVision application data. PostgreSQL server administration stays with your database provider.')
     notice = st.session_state.pop('admin_notice', None)
     if notice:
         st.success(notice)

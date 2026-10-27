@@ -30,4 +30,5 @@ Thumbs.db
 # Local database credentials
 .env
 .env.*
+!.env.example
 .streamlit/secrets.toml

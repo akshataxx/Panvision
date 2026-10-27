@@ -91,28 +91,25 @@ On Windows use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 Use the explicit virtual-environment interpreter to avoid accidentally running
 Streamlit through Conda or a global Python installation.
 
-### 1. Configure PostgreSQL privately
+### 1. Configure Neon privately
 
-Create a PostgreSQL server/database and allow your client IP through its firewall.
-For Azure, confirm the server is Ready and PostgreSQL password authentication is
-enabled. The app does not create an Azure server or database.
+In your Neon project, choose the correct branch and database, click **Connect**,
+and copy its PostgreSQL connection string. Copy `.env.example` to `.env` in the
+repository root, then replace the placeholder URL with the complete Neon URL:
 
-Set `PANVISION_DATABASE_URL` in the backend terminal to the provider's private
-connection URL, in this form (replace placeholders; do not commit real values):
-
-```text
-postgresql://DB_USER:URL_ENCODED_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
+```bash
+cp .env.example .env
 ```
 
-Preserve your provider's TLS settings; use certificate/hostname verification for
-deployment as supported by its trust configuration. Encode special characters
-in credentials. `.env` and `.streamlit/secrets.toml` are ignored by Git, but the
-app does not automatically load a `.env` file. Configure environment variables
-through your terminal or hosting secret manager. Never print or share the URL.
+The backend loads the root `.env` automatically. An environment variable already
+set in the backend process takes precedence over the file. Keep Neon's TLS query
+parameters; do not print, share or commit the URL. `.env` is ignored by Git.
+GitHub repository secrets are available only to workflows or deployments that
+explicitly pass them to the process; they do not configure a local run.
 
 ### 2. Initialize tables and create the first administrator
 
-In the terminal with `PANVISION_DATABASE_URL` set:
+From the repository root, after configuring `.env`:
 
 ```bash
 .venv/bin/python -m app.database check
@@ -120,9 +117,14 @@ In the terminal with `PANVISION_DATABASE_URL` set:
 .venv/bin/python -m app.database create-admin
 ```
 
+Run `init` only after checking that this is the intended Neon database. It is
+additive/idempotent. If your existing accounts were migrated from Azure, skip
+`create-admin` and sign in with an existing administrator account. Changing the
+connection URL alone does not copy Azure data.
+
 Administrator email/name/password are prompted; passwords are hidden. Use a new
 email if a doctor account already uses the address. There are no default
-credentials. The app administrator is distinct from the PostgreSQL/Azure
+credentials. The app administrator is distinct from the PostgreSQL provider
 administrator. Existing doctors keep their password hashes and default to doctor
 access. `init` is additive/idempotent: it creates missing application tables and
 columns without dropping existing data. It requires schema creation privileges;
