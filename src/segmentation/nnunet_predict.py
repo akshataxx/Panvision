@@ -2,12 +2,12 @@
 
     python -m src.segmentation.nnunet_export install-trainer
     python -m src.segmentation.nnunet_predict --model <.../nnUNetTrainer_PanVision__nnUNetPlans__2d> \
-        --shard 0 --num-shards 3
+        --out <data>/outputs/segmentation/P3_nnunet_2d_full/predictions --shard 0 --num-shards 3
 
 Each session takes every num_shards-th study (sorted by study_id) and skips studies already in the output folder,
 so sessions never overlap and a re-run continues where it stopped. The model is loaded once; studies are predicted
-in chunks to fast local disk, then each mask is copied to <data>/outputs/segmentation/nnunet/predictions under a
-temporary name and renamed, so a disconnect never leaves a half-written mask for MaskFolder to read.
+in chunks to fast local disk, then each mask is copied to --out under a temporary name and renamed, so a
+disconnect never leaves a half-written mask for MaskFolder to read. --dry-run only reports what is pending.
 Settings match the earlier P3 predictions (checkpoint_best, fold 0, no mirroring).
 """
 
@@ -40,14 +40,14 @@ def main(argv=None):
     parser.add_argument('--work', default='/content/nnunet/full_predictions', help='fast local scratch')
     parser.add_argument('--data-root', default=None)
     parser.add_argument('--splits', default='data/splits.csv')
-    parser.add_argument('--out', default=None, help='default <data>/outputs/segmentation/nnunet/predictions')
+    parser.add_argument('--out', required=True, help="one folder per model, so different models' masks never mix")
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
     if args.num_shards < 1 or not 0 <= args.shard < args.num_shards:
         parser.error('--shard must be in [0, --num-shards)')
 
     root = Path(args.data_root) if args.data_root else data_root()
-    out = Path(args.out) if args.out else root / 'outputs/segmentation/nnunet/predictions'
+    out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     print('Finding studies (a few minutes on Drive)...', flush=True)
     studies = find_studies(root, args.splits)
@@ -57,7 +57,7 @@ def main(argv=None):
     print(f'Shard {args.shard + 1}/{args.num_shards}: {len(mine)} studies; already predicted: '
           f'{len(mine) - len(rows)}; pending: {len(rows)}', flush=True)
     if args.dry_run or rows.empty:
-        return int(not rows.empty)  # a dry run fails while masks are pending, so callers can wait for every shard
+        return int(not rows.empty)  # a dry run exits non-zero while masks are pending
 
     import torch
     if not torch.cuda.is_available():

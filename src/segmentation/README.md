@@ -14,8 +14,8 @@ Two-stage cascade on preprocessed volumes (`src/preprocessing`): Stage 1 pancrea
 - No flip augmentation (pancreas is not left-right symmetric), also disabled for nnU-Net.
 
 Train/evaluate on Colab: `notebooks/colab_segmentation.ipynb` (P1, P2, L0-L3, selection, test, export) and
-`notebooks/colab_nnunet.ipynb` (P3). P3 pancreas masks for every scan, split across Colab accounts:
-`notebooks/colab_pancreas_all.ipynb` (`src/segmentation/nnunet_predict.py`). Outputs in the shared data folder:
+`notebooks/colab_nnunet.ipynb` (P3, its retrain `P3_nnunet_2d_full`, and that model's pancreas masks for every
+scan, in resumable shard jobs with `src/segmentation/nnunet_predict.py`). Outputs in the shared data folder:
 `models/segmentation/<run>/best.pt`, `outputs/segmentation/<study_id>/{pancreas,lesion}.nii.gz`, `roi.json`,
 `outputs/segmentation/measurements.csv`, `outputs/segmentation/results/*.csv`.
 
@@ -46,3 +46,12 @@ The per-case and summary CSVs go to `outputs/segmentation/results/`. If a valida
 exploratory export, pass `--lesion-threshold` and `--lesion-min-voxels` to `src.segmentation.infer`, and choose a
 separate `--out` folder to preserve the original masks. The original test has already been viewed; any subsequent
 test result for a changed setting is exploratory rather than a new untouched holdout result.
+
+## Pancreas masks for every scan
+
+P3 nnU-Net had the highest pancreas validation Dice (0.819 over 80 cases, versus 0.783 for P2 and 0.764 for P1).
+It was then retrained with the same settings on every labelled train scan instead of 250 (`P3_nnunet_2d_full`;
+the same 30 validation scans select its checkpoint) and run on all 2,235 processed scans with
+section 5 of `notebooks/colab_nnunet.ipynb`: `outputs/segmentation/P3_nnunet_2d_full/predictions/<study_id>.nii.gz`.
+The retrain has not been scored against the original P3 separately; the choice of nnU-Net rests on the comparison
+above. Train-scan masks come from a model that saw those scans, so evaluate only on val/test masks.

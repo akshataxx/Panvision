@@ -77,8 +77,6 @@ def lesion_summary(frame):
     return pd.concat(parts, ignore_index=True)
 
 
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='command', required=True)
