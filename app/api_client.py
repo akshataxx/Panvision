@@ -31,10 +31,10 @@ def request(method, path, *, authenticated=True, timeout=60, **kwargs):
     if response.status_code == 401 and authenticated:
         raise SessionExpired('Your session expired. Sign in again.')
     if response.is_error or response.is_redirect:
-        if response.status_code == 413 and path.endswith('/pancreas'):
-            raise APIError('This scan is too large for local pancreas segmentation.')
-        if response.status_code == 503 and path.endswith('/pancreas'):
-            raise APIError('Pancreas segmentation is unavailable. Check the backend model files and try again.')
+        if response.status_code == 413 and path.endswith(('/pancreas', '/lesion')):
+            raise APIError('This scan is too large for local segmentation.')
+        if response.status_code == 503 and path.endswith(('/pancreas', '/lesion')):
+            raise APIError('Segmentation is unavailable. Check the backend model files and try again.')
         if response.status_code == 422:
             raise APIError('Check the email, study ID, or notes. Notes must be at most 10,000 characters.')
         # Never forward raw proxy errors, tracebacks, or credential-bearing URLs.

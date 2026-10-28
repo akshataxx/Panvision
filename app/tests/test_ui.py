@@ -138,9 +138,30 @@ class WorkspaceUITests(unittest.TestCase):
             app.sidebar.radio[0].set_value('Case Report').run()
             self.assertFalse(app.exception, [e.message for e in app.exception])
             self.assertFalse(next(b for b in app.button if b.label == 'Run pancreas segmentation').disabled)
-            self.assertTrue(next(b for b in app.button if b.label == 'Run lesion segmentation').disabled)
+            self.assertFalse(next(b for b in app.button if b.label == 'Run lesion segmentation').disabled)
             self.assertTrue(next(b for b in app.button if b.label == 'Run Grad-CAM').disabled)
             api.assert_not_called()
+
+    def test_lesion_segmentation_shows_mask_and_volume(self):
+        pancreas = np.ones((4,8,8), dtype=np.uint8)
+        lesion = np.zeros((4,8,8), dtype=np.uint8)
+        lesion[1,2:4,3:5] = 1
+        output = io.BytesIO()
+        np.savez_compressed(output, pancreas=pancreas, lesion=lesion)
+        with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
+             patch('app.dashboard.request', return_value=SimpleNamespace(content=output.getvalue())) as api:
+            app = AppTest.from_file(APP).run()
+            app.session_state['upload_review'] = {
+                'digest':'digest', 'name':'scan.nii.gz', 'content':b'ct',
+                'array':np.ones((4,8,8)), 'spacing':(1,1,2), 'upload_id':'upload-1',
+            }
+            app.sidebar.radio[0].set_value('Case Report').run()
+            next(button for button in app.button if button.label == 'Run lesion segmentation').click().run()
+            self.assertFalse(app.exception, [error.message for error in app.exception])
+            api.assert_called_with('POST', '/uploads/upload-1/lesion',
+                                   files={'file':('scan.nii.gz', b'ct')}, timeout=900)
+            np.testing.assert_array_equal(app.session_state['upload_review']['lesion_mask'], lesion)
+            self.assertTrue(any('Coral: predicted lesion' in item.value for item in app.caption))
 
 
     def test_doctor_profile_has_no_admin_navigation(self):
