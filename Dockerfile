@@ -11,8 +11,8 @@ RUN apt-get update \
 
 WORKDIR /srv/panvision
 
-# CPU-only torch first so nnunetv2/monai don't pull the multi-GB CUDA build.
-RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+# CPU-only torch/torchvision first so nnunetv2/monai don't pull the multi-GB CUDA build.
+RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 COPY requirements.txt ./requirements.txt
 COPY app/requirements.txt app/inference-requirements.txt ./app/
 RUN pip install -r app/inference-requirements.txt

@@ -26,7 +26,7 @@ jobs:
             app/requirements.txt
             app/inference-requirements.txt
       # Same dependencies as the Docker image, so the segmentation tests run too.
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -r app/inference-requirements.txt
       - run: python -m unittest discover -s app/tests
 

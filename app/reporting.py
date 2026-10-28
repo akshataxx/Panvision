@@ -9,6 +9,16 @@ from PIL import Image
 from app.data import (annotation_volume, initial_slice, rgb_slice, upload_rgb_slice,
                       upload_pancreas_slice, upload_display_mode)
 
+CLASSIFIER_CAVEAT = ('Research model (DenseNet-121 on predicted-pancreas crops) · Validation only, 334 patients: '
+                     'AUC 0.91, sensitivity 84%, specificity 85%. Not yet evaluated on the held-out test set. '
+                     'Not a diagnosis.')
+
+
+def classification_text(classification):
+    probability, threshold = classification['probability'], classification['threshold']
+    label = 'PDAC suspected' if probability >= threshold else 'Non-PDAC'
+    return f'{label} (model probability {probability:.2f}; decision threshold {threshold:.2f})'
+
 
 def build_report(case, array, labels, spacing, notes=''):
     escape = lambda value: html.escape(str(value))
@@ -47,7 +57,8 @@ confidence, segmentation predictions, Grad-CAM, and similar-case retrieval are u
 <p><small>Academic research prototype. Not for clinical diagnosis or treatment. Source labels and annotations are not model predictions.</small></p></body></html>'''
 
 
-def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancreas_mask=None):
+def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancreas_mask=None,
+              classification=None):
     """Return a portable PDF using real case evidence and no external services."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
@@ -87,7 +98,8 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
     section('2. Diagnosis and measurements')
     value = annotation_volume(labels, spacing)
     rows = [('Diagnosis' if uploaded else 'Dataset diagnosis', case.get('diagnosis', 'Unavailable')),
-            ('Model prediction', 'Not available - trained model not connected')]
+            ('Model prediction', classification_text(classification) if uploaded and classification
+             else 'Not run' if uploaded else 'Not available - trained model not connected')]
     if uploaded:
         rows.append(('Pancreas segmentation', 'Model overlay included' if pancreas_region else
                      'No region marked by model' if pancreas_mask is not None else 'Not run'))
@@ -98,8 +110,12 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
     evidence = ('Uploaded volume passed structural validation. This PDF includes the CT preview and review notes; '
                 'the pancreas overlay is a model estimate when present. Lesion segmentation is not included.' if uploaded
                 else 'Diagnosis is the PANORAMA source label. Volume comes from supplied annotations.')
-    story.extend([Spacer(1, 8), paragraph(evidence + ' Model probability, confidence, diameter, location, Grad-CAM '
-                                        'and similar-case retrieval are unavailable.', 'SmallNote')])
+    unavailable = (' Diameter, location, Grad-CAM and similar-case retrieval are unavailable.'
+                   if uploaded and classification else ' Model probability, confidence, diameter, location, Grad-CAM '
+                   'and similar-case retrieval are unavailable.')
+    story.extend([Spacer(1, 8), paragraph(evidence + unavailable, 'SmallNote')])
+    if uploaded and classification:
+        story.append(paragraph(CLASSIFIER_CAVEAT, 'SmallNote'))
     section('3. Visual results')
     z = (int(pancreas_mask.sum(axis=(1, 2)).argmax()) if uploaded and pancreas_region
          else initial_slice(array, labels))

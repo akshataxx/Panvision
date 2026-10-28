@@ -175,6 +175,70 @@ class BackendTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 409)
                 p3.assert_not_called()
 
+    def test_classification_route_runs_p3_then_classifier_for_owned_upload(self):
+        from app.classification import NoPancreasRegion
+        uid = '11111111-1111-4111-8111-111111111111'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'scan.nii.gz'
+            sitk.WriteImage(sitk.GetImageFromArray(np.ones((4,8,8), dtype=np.float32)), str(path))
+            content = path.read_bytes()
+            record = {'status':'validated', 'sha256':hashlib.sha256(content).hexdigest()}
+            pancreas = np.ones((4,8,8), dtype=bool)
+            result = {'probability': 0.73, 'threshold': 0.42, 'pdac': True, 'slices': 3}
+            available = [patch('app.api.model_available', return_value=True),
+                         patch('app.api.classifier_model_available', return_value=True)]
+            for item in available:
+                item.start()
+                self.addCleanup(item.stop)
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.segment_pancreas', return_value=pancreas) as p3, \
+                 patch('app.api.classify_pdac', return_value=result) as classifier:
+                response = self.client.post(f'/uploads/{uid}/classification', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 200, response.text[:200])
+                with np.load(io.BytesIO(response.content), allow_pickle=False) as output:
+                    np.testing.assert_array_equal(output['pancreas'], pancreas)
+                    self.assertAlmostEqual(float(output['probability']), 0.73)
+                    self.assertAlmostEqual(float(output['threshold']), 0.42)
+                p3.assert_called_once()
+                np.testing.assert_array_equal(classifier.call_args.args[2], pancreas)
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.segment_pancreas', return_value=pancreas), \
+                 patch('app.api.classify_pdac', side_effect=NoPancreasRegion('none')):
+                response = self.client.post(f'/uploads/{uid}/classification', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 422)
+            with patch('app.api.db.get_upload', return_value={**record, 'sha256':'wrong'}), \
+                 patch('app.api.segment_pancreas') as p3:
+                response = self.client.post(f'/uploads/{uid}/classification', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 409)
+                p3.assert_not_called()
+
+    def test_pdf_classification_uses_server_threshold(self):
+        uid = '11111111-1111-4111-8111-111111111111'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'scan.nii.gz'
+            sitk.WriteImage(sitk.GetImageFromArray(np.ones((4,8,8), dtype=np.float32)), str(path))
+            content = path.read_bytes()
+            record = {'status':'validated', 'sha256':hashlib.sha256(content).hexdigest()}
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.frozen_config', return_value={'threshold': 0.42}), \
+                 patch('app.api.build_pdf', return_value=b'%PDF-test') as pdf:
+                response = self.client.post('/uploads/report.pdf', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)},
+                                            data={'upload_id': uid, 'pdac_probability': '0.30'})
+                self.assertEqual(response.status_code, 200, response.text[:200])
+                self.assertEqual(pdf.call_args.kwargs['classification'], {'probability': 0.30, 'threshold': 0.42})
+            response = self.client.post('/uploads/report.pdf', headers=self.headers,
+                                        files={'file':('scan.nii.gz', content)},
+                                        data={'pdac_probability': '0.30'})
+            self.assertEqual(response.status_code, 422)
+            response = self.client.post('/uploads/report.pdf', headers=self.headers,
+                                        files={'file':('scan.nii.gz', content)},
+                                        data={'upload_id': uid, 'pdac_probability': '1.5'})
+            self.assertEqual(response.status_code, 422)
+
 
     def test_admin_authorization_and_doctor_creation(self):
         for path in ('/admin/accounts','/admin/database'):

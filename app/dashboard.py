@@ -12,6 +12,7 @@ import streamlit as st
 from app.api_client import request, sign_out, APIError, SessionExpired
 from app.auth import require_doctor, idle_watchdog
 from app.data import upload_rgb_slice, upload_display_mode, upload_pancreas_slice, upload_lesion_slice
+from app.reporting import CLASSIFIER_CAVEAT, classification_text
 from app.validation import read_ct
 
 
@@ -72,6 +73,24 @@ def run_lesion(reviewed):
     if lesion.any():
         reviewed['jump_to_lesion'] = True
     reviewed.pop('lesion_error', None)
+
+
+def run_classification(reviewed):
+    response = request('POST', f'/uploads/{reviewed["upload_id"]}/classification',
+                       files={'file': (reviewed['name'], reviewed['content'])}, timeout=900)
+    try:
+        with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
+            pancreas = result['pancreas'].astype(bool)
+            probability, threshold = float(result['probability']), float(result['threshold'])
+        if pancreas.shape != reviewed['array'].shape:
+            raise ValueError('Mask shape does not match the scan.')
+        if not (0 <= probability <= 1 and 0 <= threshold <= 1):
+            raise ValueError('Probability is out of range.')
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        raise ValueError('The backend returned an invalid classification result.') from exc
+    reviewed['pancreas_mask'] = pancreas
+    reviewed['classification'] = {'probability': probability, 'threshold': threshold}
+    reviewed.pop('classification_error', None)
 
 
 def heading(title, subtitle):
@@ -187,17 +206,48 @@ def imaging_panels(reviewed, key):
         st.caption('Pancreas and lesion overlays are model estimates for research review; they are not a diagnosis.')
 
 
-def result_cards(reviewed):
+def classification_card(reviewed, key):
+    result = reviewed.get('classification') if reviewed else None
+    st.markdown('##### PDAC classification')
+    status = (classification_text(result).split(' (')[0] if result
+              else 'Not analyzed' if reviewed else 'No result yet')
+    st.markdown(f'<div class="result-status">{html.escape(status)}</div>', unsafe_allow_html=True)
+    if result:
+        st.caption(f'Model probability {result["probability"]:.2f} · decision threshold {result["threshold"]:.2f}')
+        st.caption(CLASSIFIER_CAVEAT)
+    else:
+        st.caption('Patient-level PDAC / Non-PDAC estimate from the research classifier.')
+    if key == 'report' and reviewed:
+        label = ('Rerun PDAC classification' if result
+                 else 'Retry PDAC classification' if reviewed.get('classification_error')
+                 else 'Run PDAC classification')
+        if st.button(label, disabled=not reviewed.get('upload_id'), key='run_classification_report'):
+            try:
+                with st.spinner('Running pancreas segmentation and PDAC classification… this may take several minutes.'):
+                    run_classification(reviewed)
+                st.rerun()
+            except (APIError, ValueError) as exc:
+                if isinstance(exc, SessionExpired):
+                    raise
+                reviewed['classification_error'] = str(exc)
+        if reviewed.get('classification_error'):
+            st.error(f'PDAC classification could not complete: {reviewed["classification_error"]}')
+
+
+def result_cards(reviewed, key='home'):
     lesion = reviewed.get('lesion_mask') if reviewed else None
     spacing = reviewed.get('spacing') if reviewed else None
     volume = float(lesion.sum() * np.prod(spacing) / 1000) if lesion is not None else None
-    for column, title, value, detail in zip(st.columns(3),
+    columns = st.columns(4)
+    with columns[0], st.container(border=True):
+        classification_card(reviewed, key)
+    for column, title, value, detail in zip(columns[1:],
             ['Lesion model output', 'Model mask volume', 'Top 3 similar cases'],
             ['Model-marked region' if lesion is not None and lesion.any() else 'No region marked' if lesion is not None
              else 'Not analyzed' if reviewed else 'No result yet',
              f'{volume:.2f} cm³' if volume is not None else 'Not available', 'No matches yet'],
             ['Model proposal only; this is not a PDAC diagnosis.' if lesion is not None
-             else 'PDAC / Non-PDAC and confidence require a classification model.',
+             else 'Run lesion segmentation to inspect model-marked regions.',
              'Volume of the model-marked mask, not a confirmed tumour measurement.' if lesion is not None
              else 'Run lesion segmentation to estimate mask volume.',
              'Reference retrieval requires a trained embedding model.']):
@@ -237,6 +287,8 @@ def home(doctor):
         st.write('**Pancreas segmentation:** ' + ('Complete' if reviewed and reviewed.get('pancreas_mask') is not None
                                                   else 'Not run' if reviewed else 'Awaiting upload'))
         st.write('**Lesion segmentation:** ' + ('Complete' if reviewed and reviewed.get('lesion_mask') is not None
+                                                 else 'Not run' if reviewed else 'Awaiting upload'))
+        st.write('**PDAC classification:** ' + ('Complete' if reviewed and reviewed.get('classification')
                                                  else 'Not run' if reviewed else 'Awaiting upload'))
         st.caption('Temporary review · Research use only')
     with right, st.container(border=True):
@@ -283,10 +335,11 @@ def uploaded_report():
         if not reviewed['pancreas_mask'].any():
             st.warning('The model did not find a pancreas region in this scan.')
     else:
-        st.info('File validation passed. Choose a model tab and run an available analysis. PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
+        st.info('File validation passed. Choose a model tab or run PDAC classification below. '
+                'Model outputs are research estimates, not a diagnosis.')
     array, spacing = reviewed['array'], reviewed['spacing']
     imaging_panels(reviewed, 'report')
-    result_cards(reviewed)
+    result_cards(reviewed, 'report')
     left, right = st.columns([1, 1])
     with left, st.container(border=True):
         st.subheader('Scan geometry')
@@ -305,15 +358,19 @@ def uploaded_report():
         st.write('**Diagnosis:** Not available')
         st.write('**Pancreas segmentation:** ' + ('Complete' if reviewed.get('pancreas_mask') is not None else 'Not run'))
         st.write('**Lesion segmentation:** ' + ('Complete' if reviewed.get('lesion_mask') is not None else 'Not run'))
+        classification = reviewed.get('classification')
+        st.write('**PDAC classification:** ' + (classification_text(classification) if classification else 'Not run'))
         st.write('**Grad-CAM:** Not available')
         pancreas_mask = reviewed.get('pancreas_mask')
         pdf_key = (reviewed['digest'], notes, reviewed.get('display_mode', 'auto'),
-                   id(pancreas_mask))
+                   id(pancreas_mask), classification['probability'] if classification else None)
         if st.button('Prepare PDF', type='primary', width='stretch'):
             with st.spinner('Preparing report…'):
                 report_data = {'notes':notes, 'display_mode':reviewed.get('display_mode','auto')}
                 if reviewed.get('upload_id'):
                     report_data['upload_id'] = reviewed['upload_id']
+                    if classification:
+                        report_data['pdac_probability'] = str(classification['probability'])
                 files = {'file': (reviewed['name'], reviewed['content'])}
                 if pancreas_mask is not None:
                     packed = np.packbits(pancreas_mask.reshape(-1)).tobytes()

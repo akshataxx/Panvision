@@ -48,7 +48,8 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertEqual(app.session_state['uploaded_report_pdf'][1], b'%PDF-test')
             self.assertEqual(api.call_args.args[:2], ('POST','/uploads/report.pdf'))
             self.assertEqual(api.call_args.kwargs['data']['notes'], 'Review this uploaded scan')
-            self.assertTrue(any('prediction is unavailable' in info.value for info in app.info))
+            self.assertTrue(any('run PDAC classification below' in info.value for info in app.info))
+            self.assertNotIn('pdac_probability', api.call_args.kwargs['data'])
 
     def test_pdf_sends_pancreas_mask_but_not_lesion_mask(self):
         pancreas = np.zeros((4, 8, 8), dtype=bool)
@@ -161,7 +162,34 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertFalse(next(b for b in app.button if b.label == 'Run pancreas segmentation').disabled)
             self.assertFalse(next(b for b in app.button if b.label == 'Run lesion segmentation').disabled)
             self.assertTrue(next(b for b in app.button if b.label == 'Run Grad-CAM').disabled)
+            self.assertFalse(next(b for b in app.button if b.label == 'Run PDAC classification').disabled)
             api.assert_not_called()
+
+    def test_pdac_classification_shows_result_and_reaches_pdf(self):
+        pancreas = np.zeros((4,8,8), dtype=np.uint8)
+        pancreas[1,2:5,3:6] = 1
+        output = io.BytesIO()
+        np.savez_compressed(output, pancreas=pancreas, probability=0.73, threshold=0.42, slices=3)
+        with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
+             patch('app.dashboard.request', return_value=SimpleNamespace(content=output.getvalue())) as api:
+            app = AppTest.from_file(APP).run()
+            app.session_state['upload_review'] = {
+                'digest':'digest', 'name':'scan.nii.gz', 'content':b'ct',
+                'array':np.ones((4,8,8)), 'spacing':(1,1,2), 'upload_id':'upload-1',
+            }
+            app.sidebar.radio[0].set_value('Case Report').run()
+            next(button for button in app.button if button.label == 'Run PDAC classification').click().run()
+            self.assertFalse(app.exception, [error.message for error in app.exception])
+            api.assert_called_with('POST', '/uploads/upload-1/classification',
+                                   files={'file':('scan.nii.gz', b'ct')}, timeout=900)
+            review = app.session_state['upload_review']
+            self.assertEqual(review['classification'], {'probability': 0.73, 'threshold': 0.42})
+            np.testing.assert_array_equal(review['pancreas_mask'], pancreas)
+            self.assertTrue(any('PDAC suspected' in item.value for item in app.markdown))
+            self.assertTrue(any('Not yet evaluated on the held-out test set' in item.value for item in app.caption))
+            api.return_value = SimpleNamespace(content=b'%PDF-test')
+            next(button for button in app.button if button.label == 'Prepare PDF').click().run()
+            self.assertEqual(api.call_args.kwargs['data']['pdac_probability'], '0.73')
 
     def test_lesion_segmentation_shows_mask_and_volume(self):
         pancreas = np.ones((4,8,8), dtype=np.uint8)
