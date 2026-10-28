@@ -7,7 +7,11 @@ nibabel
 SimpleITK
 torch
 torchvision
+monai
+scipy
 grad-cam
 streamlit
 jinja2
 jupyter
+openpyxl
+huggingface_hub

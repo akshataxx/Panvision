@@ -86,7 +86,8 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto'):
            ('Model prediction', 'Not available - trained model not connected'),
            ('Annotated lesion volume', f'{value:.2f} cm3' if value is not None else 'Unavailable'),
            ('Voxel spacing (XYZ)', ' x '.join(f'{v:.2f}' for v in spacing) + ' mm')])
-    evidence = ('Uploaded volume passed structural validation. No diagnosis or segmentation has been generated.' if uploaded
+    evidence = ('Uploaded volume passed structural validation. This PDF contains the CT preview and review notes; '
+                'a pancreas mask shown in the workspace is not included in this PDF.' if uploaded
                 else 'Diagnosis is the PANORAMA source label. Volume comes from supplied annotations.')
     story.extend([Spacer(1, 8), paragraph(evidence + ' Model probability, confidence, diameter, location, Grad-CAM '
                                         'and similar-case retrieval are unavailable.', 'SmallNote')])
