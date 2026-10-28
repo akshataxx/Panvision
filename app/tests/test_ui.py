@@ -38,6 +38,10 @@ class WorkspaceUITests(unittest.TestCase):
                                                    'array':np.ones((4,8,8)), 'spacing':(1,1,2)}
             app.sidebar.radio[0].set_value('Case Report').run()
             self.assertFalse(app.exception)
+            self.assertEqual([tab.label for tab in app.tabs], ['Pancreas', 'Lesion', 'Grad-CAM'])
+            self.assertTrue(any('File validation</span><strong>Passed' in item.value and
+                                'Model analysis</span><strong>Not connected' in item.value
+                                for item in app.markdown))
             app.text_area[0].set_value('Review this uploaded scan').run()
             next(b for b in app.button if b.label == 'Prepare PDF').click().run()
             self.assertEqual(app.session_state['uploaded_report_pdf'][1], b'%PDF-test')
