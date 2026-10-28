@@ -4,9 +4,9 @@ Read the crops made by make_crops.py and hand them over one picture at a time.
 Every picture comes with the patient's label (1 = PDAC) and a patient number, so the
 scores of one patient's slices can be averaged afterwards.
 
-mode="train": PDAC patients contribute only slices that contain tumour (their other
-              slices look healthy, so the label "PDAC" would be misleading there).
-              Non-PDAC patients contribute all their saved pancreas slices.
+mode="train": annotation-assisted PDAC crops may use known tumour slices. Predicted-
+              pancreas crops always use all selected pancreas slices and never use
+              lesion metadata. Non-PDAC patients use all saved pancreas slices.
 mode="eval":  every patient contributes all of their saved pancreas slices, because at
               test time we do not know where the tumour is.
 
@@ -21,20 +21,11 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from src.classification.crop_policy import select_rows
+
 # Standard values the ImageNet-trained ResNet-50 expects (same as the explainability code).
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
 STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-
-
-def select_rows(has_lesion, label, mode, drop_unlocalised_pdac=False):
-    """Which of a study's saved slices to use. Returns row numbers (maybe empty)."""
-    has_lesion = np.asarray(has_lesion, dtype=bool)
-    if mode == "train" and label == 1:
-        if has_lesion.any():
-            return np.where(has_lesion)[0]
-        if drop_unlocalised_pdac:
-            return np.array([], dtype=int)  # cannot tell which slices show tumour
-    return np.arange(len(has_lesion))
 
 
 def load_cache(cache_dir, split, mode, drop_unlocalised_pdac=False):
@@ -48,7 +39,9 @@ def load_cache(cache_dir, split, mode, drop_unlocalised_pdac=False):
             if split != "all" and str(f["split"]) != split:
                 continue
             label = int(f["label"])
-            rows = select_rows(f["has_lesion"], label, mode, drop_unlocalised_pdac)
+            crop_source = str(f.get("crop_source", "annotation_assisted"))
+            rows = select_rows(f["has_lesion"], label, mode, drop_unlocalised_pdac,
+                               crop_source=crop_source)
             if len(rows) == 0:
                 continue
             pid = str(f["patient_id"])

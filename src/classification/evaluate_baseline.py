@@ -36,7 +36,7 @@ def main():
         from src.classification.dataset import CropDataset
         from src.classification.evaluation import patient_scores, predict_probs, bootstrap_auc_ci
         import cnn_model, densenet_model
-    audit_crops(args.crops, args.splits)
+    audit, _ = audit_crops(args.crops, args.splits)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     module = cnn_model if args.model == 'cnn' else densenet_model
     model, notes = module.load_classifier(args.checkpoint, device)
@@ -65,7 +65,8 @@ def main():
     (output/'provenance.json').write_text(json.dumps({
         'model': args.model, 'checkpoint_sha256': file_hash(args.checkpoint),
         'splits_sha256': file_hash(args.splits), 'checkpoint_epoch': notes.get('epoch'),
-        'scope': 'annotation-assisted validation; thresholds selected on validation'}, indent=2))
+        'crop_source': audit.crop_source.iloc[0],
+        'scope': 'validation-only aggregation and threshold selection'}, indent=2))
     print(result.to_string(index=False))
     print(f'Saved: {output}. Freeze aggregation and threshold before held-out testing.')
 

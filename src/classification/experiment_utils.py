@@ -7,6 +7,8 @@ import pandas as pd
 from sklearn.metrics import (average_precision_score, confusion_matrix,
                              f1_score, roc_auc_score, roc_curve)
 
+from src.classification.crop_policy import CROP_SOURCES
+
 METHODS = ['mean', 'max', 'topk:3', 'topk:5', 'topk:10', 'frac:0.1', 'frac:0.2', 'frac:0.5']
 
 
@@ -39,16 +41,30 @@ def audit_crops(folder, splits):
                 raise ValueError(f'Invalid crops: {study}')
             if lesion.dtype != np.bool_ or lesion.shape != (len(crops),) or slices.shape != (len(crops),):
                 raise ValueError(f'Invalid slice metadata: {study}')
+            source = str(item.get('crop_source', 'annotation_assisted'))
+            if source not in CROP_SOURCES:
+                raise ValueError(f'Unknown crop source: {study}')
+            if source == 'predicted_pancreas' and lesion.any():
+                raise ValueError(f'Predicted-pancreas crops cannot contain lesion-assisted rows: {study}')
+            prediction_id = str(item.get('prediction_id', ''))
+            if source == 'predicted_pancreas' and not prediction_id.strip():
+                raise ValueError(f'Predicted-pancreas crop is missing prediction provenance: {study}')
             if len(set(slices.tolist())) != len(slices):
                 raise ValueError(f'Duplicate slices: {study}')
             window = float(item['window_mm'].item())
             if not np.isfinite(window) or window <= 0:
                 raise ValueError(f'Invalid crop window: {study}')
             windows.add(window)
-            records.append(dict(patient_id=patient, study_id=study, split=split, label=label, slices=len(crops)))
+            records.append(dict(patient_id=patient, study_id=study, split=split, label=label,
+                                slices=len(crops), crop_source=source, prediction_id=prediction_id))
     if not records or len(windows) != 1:
         raise ValueError('Empty crop directory or mixed window settings')
-    return pd.DataFrame(records), windows.pop()
+    result = pd.DataFrame(records)
+    if result.crop_source.nunique() != 1:
+        raise ValueError('Mixed crop sources')
+    if result.crop_source.iloc[0] == 'predicted_pancreas' and result.prediction_id.nunique() != 1:
+        raise ValueError('Mixed segmentation prediction runs')
+    return result, windows.pop()
 
 
 def threshold_on_validation(scores, labels):

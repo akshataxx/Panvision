@@ -1,4 +1,16 @@
-# notebooks
-Exploration notebooks. Name them `initials_topic.ipynb` to avoid clashes.
+# Notebooks
 
-- `Resnet50_trainer.ipynb`: trains the ResNet-50 classifier on Colab (T4 GPU), picks how slice scores become a patient score using validation, and scores the test patients once. Needs `crops.zip` and `classification.zip` in the PanVision folder on Google Drive.
+Exploration and Colab workflows. Reusable pipeline code belongs in `src/`.
+
+Classification notebooks are under `notebooks/classification/`:
+
+- `Resnet50_trainer.ipynb`: ResNet-50 training and patient-level evaluation.
+- `PanVision_SimpleCNN.ipynb`: SimpleCNN baseline training and evaluation.
+- `PanVision_Generate_Embeddings.ipynb`: use the frozen DenseNet checkpoint to
+  export train-only KNN references and separate validation/test query embeddings.
+
+DenseNet is maintained as reusable Python code in `src/classification/` rather
+than as a training notebook.
+
+The notebooks use data mounted from Google Drive. They must not contain access
+tokens, database URLs, passwords, model weights, crops, or patient data.
