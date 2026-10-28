@@ -6,11 +6,12 @@ import csv
 import io
 from pathlib import Path
 
+import numpy as np
 import streamlit as st
 
 from app.api_client import request, sign_out, APIError, SessionExpired
 from app.auth import require_doctor, idle_watchdog
-from app.data import upload_rgb_slice, upload_display_mode
+from app.data import upload_rgb_slice, upload_display_mode, upload_pancreas_slice
 from app.validation import read_ct
 
 
@@ -41,6 +42,20 @@ def accept_upload(name, content):
     }
 
 
+def run_pancreas(reviewed):
+    response = request('POST', f'/uploads/{reviewed["upload_id"]}/pancreas',
+                       files={'file': (reviewed['name'], reviewed['content'])}, timeout=600)
+    try:
+        with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
+            mask = result['mask'].astype(bool)
+        if mask.shape != reviewed['array'].shape:
+            raise ValueError('Mask shape does not match the scan.')
+    except (OSError, KeyError, ValueError) as exc:
+        raise ValueError('The backend returned an invalid pancreas mask.') from exc
+    reviewed['pancreas_mask'] = mask
+    reviewed.pop('pancreas_error', None)
+
+
 def heading(title, subtitle):
     st.markdown(f'<h1>{html.escape(title)}</h1><p class="subtitle">{html.escape(subtitle)}</p>', unsafe_allow_html=True)
 
@@ -61,13 +76,16 @@ def scan_strip(reviewed):
     name = reviewed['name'] if reviewed else 'No scan selected'
     items = [('Scan', name), ('Slices', str(len(array)) if reviewed else '—'),
              ('File validation', 'Passed' if reviewed else 'Awaiting upload'),
-             ('Model analysis', 'Not connected')]
+             ('Model analysis', 'Pancreas complete' if reviewed and reviewed.get('pancreas_mask') is not None
+              else 'Not run' if reviewed else 'Awaiting upload')]
     st.markdown('<div class="scan-strip">'+''.join(
         f'<div><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>'
         for label, value in items)+'</div>', unsafe_allow_html=True)
 
 
 def imaging_panels(reviewed, key):
+    z = None
+    resolved = None
     image_column, output_column = st.columns([1.8, 1], gap='medium')
     with image_column, st.container(border=True):
         st.markdown('<div class="panel-title">Input CT scan</div>', unsafe_allow_html=True)
@@ -88,11 +106,38 @@ def imaging_panels(reviewed, key):
             placeholder('Upload a CT scan', 'Your axial image preview appears here.', '⊕')
     with output_column:
         st.markdown('##### Model output')
-        for tab, title in zip(st.tabs(['Pancreas', 'Lesion', 'Grad-CAM']),
-                              ['Pancreas segmentation', 'Lesion segmentation', 'Grad-CAM']):
+        for index, (tab, title) in enumerate(zip(st.tabs(['Pancreas', 'Lesion', 'Grad-CAM']),
+                                                 ['Pancreas segmentation', 'Lesion segmentation', 'Grad-CAM'])):
             with tab, st.container(border=True):
-                placeholder(title, 'Model output is not connected.' if reviewed else 'Upload a scan to begin.')
-        st.caption('These views will appear when trained models are connected. File validation alone does not generate results.')
+                if key == 'report' and reviewed:
+                    if index == 0:
+                        label = ('Rerun pancreas segmentation' if reviewed.get('pancreas_mask') is not None
+                                 else 'Retry pancreas segmentation' if reviewed.get('pancreas_error')
+                                 else 'Run pancreas segmentation')
+                        if st.button(label, disabled=not reviewed.get('upload_id'), key='run_pancreas_report'):
+                            try:
+                                with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
+                                    run_pancreas(reviewed)
+                                st.rerun()
+                            except (APIError, ValueError) as exc:
+                                if isinstance(exc, SessionExpired):
+                                    raise
+                                reviewed['pancreas_error'] = str(exc)
+                        if reviewed.get('pancreas_error'):
+                            st.error(f'Pancreas segmentation could not complete: {reviewed["pancreas_error"]}')
+                    else:
+                        st.button('Run lesion segmentation' if index == 1 else 'Run Grad-CAM',
+                                  disabled=True, key=f'unavailable_model_{index}')
+                        st.caption('This model is not connected yet.')
+                mask = reviewed.get('pancreas_mask') if reviewed else None
+                if index == 0 and mask is not None:
+                    st.image(upload_pancreas_slice(array, mask, z, resolved), width='stretch')
+                    st.caption(f'Green: predicted pancreas · Slice {z+1} / {len(array)}')
+                else:
+                    detail = ('Run pancreas segmentation to create this overlay.' if index == 0 and reviewed
+                              else 'Model output is not connected.' if reviewed else 'Upload a scan to begin.')
+                    placeholder(title, detail)
+        st.caption('Pancreas overlays are model estimates for research review. Lesion and Grad-CAM models are not connected.')
 
 
 def result_cards(reviewed):
@@ -123,14 +168,18 @@ def home(doctor):
         st.markdown('##### Key findings')
         if reviewed:
             st.write('The uploaded scan passed structural validation.')
-            st.caption('Diagnosis and AI-generated findings are pending. File validation does not establish a diagnosis.')
+            if reviewed.get('pancreas_mask') is not None:
+                st.caption('A model-generated pancreas outline is available. Diagnosis and lesion findings are unavailable.')
+            else:
+                st.caption('Diagnosis and AI-generated findings are pending. File validation does not establish a diagnosis.')
         else:
             st.write('No scan has been uploaded.')
             st.caption('Start by uploading a CT. Findings and reports remain empty until a valid scan is available.')
     with middle, st.container(border=True):
         st.markdown('##### Scan information')
         st.write('**Source:** Uploaded scan' if reviewed else '**Source:** —')
-        st.write('**Inference:** Not connected')
+        st.write('**Pancreas segmentation:** ' + ('Complete' if reviewed and reviewed.get('pancreas_mask') is not None
+                                                  else 'Not run' if reviewed else 'Awaiting upload'))
         st.caption('Temporary review · Research use only')
     with right, st.container(border=True):
         st.markdown('##### Actions')
@@ -169,7 +218,12 @@ def uploaded_report():
         return
     heading('Case report', 'Scan evidence, model status, and review notes.')
     scan_strip(reviewed)
-    st.info('File validation passed. Model analysis has not run: PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
+    if reviewed.get('pancreas_mask') is not None:
+        st.success('Pancreas segmentation complete. PDAC prediction and lesion segmentation are still unavailable.')
+        if not reviewed['pancreas_mask'].any():
+            st.warning('The model did not find a pancreas region in this scan.')
+    else:
+        st.info('File validation passed. Choose a model tab and run an available analysis. PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
     array, spacing = reviewed['array'], reviewed['spacing']
     imaging_panels(reviewed, 'report')
     result_cards(reviewed)
@@ -188,8 +242,9 @@ def uploaded_report():
         if st.button('Save review notes', disabled=not reviewed.get('upload_id'), width='stretch'):
             request('PUT', f'/uploads/{reviewed["upload_id"]}/notes', json={'notes':notes})
             st.session_state['saved_report_notes'] = notes
-        st.write('**Diagnosis:** Awaiting model analysis')
-        st.write('**Segmentation / Grad-CAM:** Not available')
+        st.write('**Diagnosis:** Not available')
+        st.write('**Pancreas segmentation:** ' + ('Complete' if reviewed.get('pancreas_mask') is not None else 'Not run'))
+        st.write('**Lesion segmentation / Grad-CAM:** Not available')
         pdf_key = (reviewed['digest'], notes, reviewed.get('display_mode', 'auto'))
         if st.button('Prepare PDF', type='primary', width='stretch'):
             with st.spinner('Preparing report…'):
