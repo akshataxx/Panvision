@@ -1,0 +1,7 @@
+# Caddy obtains and renews the HTTPS certificate for PANVISION_DOMAIN automatically.
+{$PANVISION_DOMAIN} {
+	request_body {
+		max_size 520MB
+	}
+	reverse_proxy web:8501
+}
