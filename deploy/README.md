@@ -22,7 +22,7 @@ Files on the VM in `/opt/panvision`:
 | `docker-compose.yml`, `Caddyfile` | The deploy workflow, on every push |
 | `.env` (image tag + domain) | The deploy workflow, on every push |
 | `.env.prod` (`PANVISION_DATABASE_URL`) | You, once (`chmod 600`) |
-| `models/` (P3 + L2 weights) | You, once and when the models change |
+| `models/` (P3, L2 and `densenet121_predicted` classifier) | You, once and when the models change |
 
 ## One-time setup
 

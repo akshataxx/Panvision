@@ -8,6 +8,7 @@ services:
     environment:
       PANVISION_PANCREAS_MODEL_DIR: /models/P3_nnunet_2d_full/nnUNetTrainer_PanVision__nnUNetPlans__2d
       PANVISION_LESION_CHECKPOINT: /models/L2_attention_unet_roi_full/best.pt
+      PANVISION_CLASSIFIER_DIR: /models/densenet121_predicted
     volumes:
       - ./models:/models:ro
     healthcheck:

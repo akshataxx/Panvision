@@ -3,9 +3,10 @@
 PanVision is a research workspace for reviewing pancreatic CT scans. It combines
 a green-and-cream Streamlit dashboard, a FastAPI backend, and PostgreSQL account,
 upload-history and audit tables. It is an academic prototype, not a clinical
-system. P3 pancreas and L2 lesion segmentation can run when their model files
-and inference dependencies are installed. Classification, Grad-CAM and retrieval
-are not connected; the interface does not invent their results.
+system. P3 pancreas segmentation, L2 lesion segmentation and DenseNet-121 PDAC
+classification can run when their model files and inference dependencies are
+installed. Grad-CAM and retrieval are not connected; the interface does not invent
+their results.
 
 ## Folder structure
 
@@ -196,6 +197,20 @@ on a CPU. The masks live only in the current Streamlit session. The PDF includes
 the CT preview, notes, and a pancreas overlay when the model marks a region, but
 no lesion overlay. Persistent results belong to the later case-storage work.
 
+### Optional: run PDAC classification
+
+Copy the frozen DenseNet-121 run into `data/private/models/densenet121_predicted/`,
+or set `PANVISION_CLASSIFIER_DIR` to that folder. It needs `best.pt` and
+`frozen_evaluation_config.json`; the checkpoint's SHA-256 must match the config, so
+a swapped or retrained checkpoint is refused until its evaluation config is frozen too.
+On the Case Report, **Run PDAC classification** runs P3, then crops up to 24 clear
+pancreas slices exactly as `src/classification/make_predicted_crops.py` did for
+training (preprocessed grid, fixed 144 mm window, 224 × 224), averages the slice
+probabilities and applies the validation-chosen threshold (0.42). The card and PDF show
+the probability, threshold and PDAC / Non-PDAC estimate. Validation only (334 patients):
+AUC 0.91, sensitivity 84%, specificity 85%; the held-out test set has not been evaluated.
+It is a research estimate, not a diagnosis.
+
 ## PostgreSQL tables
 
 | Table | Contents |
@@ -235,8 +250,7 @@ to an upload ID requires matching ownership and file digest.
 
 CT data, masks and model weights belong in separately configured private file
 storage, not Git or PostgreSQL. Upload metadata/notes are persistent; CT files
-remain temporary. Classification inference and persistent scan/PDF storage are future
-integration work. Deployments still need HTTPS, trusted PostgreSQL TLS,
+remain temporary. Persistent scan/PDF storage is future integration work. Deployments still need HTTPS, trusted PostgreSQL TLS,
 proxy upload-size limits, login/upload rate limiting, backups, retention controls
 and appropriate authorization before handling identifiable patient data.
 
@@ -251,6 +265,7 @@ and appropriate authorization before handling identifiable patient data.
 | `POST /uploads/validate` | Validate multipart CT and return its recorded upload ID |
 | `POST /uploads/{id}/pancreas` | Run P3 pancreas segmentation for a doctor's byte-matching validated upload |
 | `POST /uploads/{id}/lesion` | Run P3 then L2 and return both masks for a doctor's byte-matching validated upload |
+| `POST /uploads/{id}/classification` | Run P3 then the frozen DenseNet classifier; return the pancreas mask, PDAC probability and threshold |
 | `POST /uploads/report.pdf` | Generate PDF from CT, notes, display mode and optional recorded upload ID |
 | `GET /me/uploads` | Own paginated upload history |
 | `GET /uploads/{id}`, `PUT /uploads/{id}/notes` | Authorized detail and owner-only notes |
