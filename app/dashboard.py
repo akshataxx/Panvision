@@ -42,6 +42,20 @@ def accept_upload(name, content):
     }
 
 
+def run_pancreas(reviewed):
+    response = request('POST', f'/uploads/{reviewed["upload_id"]}/pancreas',
+                       files={'file': (reviewed['name'], reviewed['content'])}, timeout=600)
+    try:
+        with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
+            mask = result['mask'].astype(bool)
+        if mask.shape != reviewed['array'].shape:
+            raise ValueError('Mask shape does not match the scan.')
+    except (OSError, KeyError, ValueError) as exc:
+        raise ValueError('The backend returned an invalid pancreas mask.') from exc
+    reviewed['pancreas_mask'] = mask
+    reviewed.pop('pancreas_error', None)
+
+
 def heading(title, subtitle):
     st.markdown(f'<h1>{html.escape(title)}</h1><p class="subtitle">{html.escape(subtitle)}</p>', unsafe_allow_html=True)
 
@@ -172,6 +186,14 @@ def upload_ct():
                 clear_upload()
                 st.error(str(exc) if isinstance(exc, APIError) else 'Unable to read this scan. Use a valid finite 3D NIfTI or self-contained MHA file.')
             else:
+                reviewed = st.session_state['upload_review']
+                try:
+                    with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
+                        run_pancreas(reviewed)
+                except (APIError, ValueError) as exc:
+                    if isinstance(exc, SessionExpired):
+                        raise
+                    reviewed['pancreas_error'] = str(exc)
                 navigate('Case Report')
                 st.rerun()
 
@@ -184,26 +206,24 @@ def uploaded_report():
         return
     heading('Case report', 'Scan evidence, model status, and review notes.')
     if st.button('Rerun pancreas segmentation' if reviewed.get('pancreas_mask') is not None
+                 else 'Retry pancreas segmentation' if reviewed.get('pancreas_error')
                  else 'Run pancreas segmentation', disabled=not reviewed.get('upload_id')):
-        with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
-            response = request('POST', f'/uploads/{reviewed["upload_id"]}/pancreas',
-                               files={'file': (reviewed['name'], reviewed['content'])}, timeout=600)
-            try:
-                with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
-                    mask = result['mask'].astype(bool)
-                if mask.shape != reviewed['array'].shape:
-                    raise ValueError('Mask shape does not match the scan.')
-            except (OSError, KeyError, ValueError):
-                st.error('The backend returned an invalid pancreas mask.')
-            else:
-                reviewed['pancreas_mask'] = mask
+        try:
+            with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
+                run_pancreas(reviewed)
+        except (APIError, ValueError) as exc:
+            if isinstance(exc, SessionExpired):
+                raise
+            reviewed['pancreas_error'] = str(exc)
+    if reviewed.get('pancreas_error'):
+        st.error(f'Pancreas segmentation could not complete: {reviewed["pancreas_error"]} Use the retry button above.')
     scan_strip(reviewed)
     if reviewed.get('pancreas_mask') is not None:
         st.success('Pancreas segmentation complete. PDAC prediction and lesion segmentation are still unavailable.')
         if not reviewed['pancreas_mask'].any():
             st.warning('The model did not find a pancreas region in this scan.')
     else:
-        st.info('File validation passed. Model analysis has not run: PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
+        st.info('File validation passed. Pancreas segmentation is pending. PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
     array, spacing = reviewed['array'], reviewed['spacing']
     imaging_panels(reviewed, 'report')
     result_cards(reviewed)

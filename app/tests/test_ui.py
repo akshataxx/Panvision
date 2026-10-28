@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 from streamlit.testing.v1 import AppTest
+from app.api_client import APIError
 
 APP = str(Path(__file__).resolve().parents[1]/'app.py')
 
@@ -109,8 +110,18 @@ class WorkspaceUITests(unittest.TestCase):
 
     def test_validation_button_navigates_to_report(self):
         uploaded = SimpleNamespace(name='scan.nii.gz', getvalue=lambda: b'ct-test')
+        mask = np.zeros((4,8,8), dtype=np.uint8)
+        mask[:,2:5,3:6] = 1
+        output = io.BytesIO()
+        np.savez_compressed(output, mask=mask)
+        def response(method, path, **kwargs):
+            if path == '/uploads/validate':
+                return SimpleNamespace(json=lambda:{'valid':True, 'upload_id':'upload-1'})
+            if path == '/uploads/upload-1/pancreas':
+                return SimpleNamespace(content=output.getvalue())
+            raise AssertionError(path)
         with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
-             patch('app.dashboard.request', return_value=SimpleNamespace(json=lambda:{'valid':True})), \
+             patch('app.dashboard.request', side_effect=response) as api, \
              patch('app.dashboard.st.file_uploader', return_value=uploaded), \
              patch('app.dashboard.read_ct', return_value=(np.ones((4,8,8)), (1,1,2))):
             app=AppTest.from_file(APP).run()
@@ -119,6 +130,28 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertFalse(app.exception, [e.message for e in app.exception])
             self.assertEqual(app.sidebar.radio[0].value, 'Case Report')
             self.assertEqual(app.session_state['upload_review']['name'], 'scan.nii.gz')
+            np.testing.assert_array_equal(app.session_state['upload_review']['pancreas_mask'], mask)
+            self.assertEqual(api.call_count, 2)
+            self.assertTrue(any('Pancreas complete' in item.value for item in app.markdown))
+
+    def test_segmentation_failure_keeps_validated_scan_for_retry(self):
+        uploaded = SimpleNamespace(name='scan.nii.gz', getvalue=lambda: b'ct-test')
+        def response(method, path, **kwargs):
+            if path == '/uploads/validate':
+                return SimpleNamespace(json=lambda:{'valid':True, 'upload_id':'upload-1'})
+            raise APIError('Pancreas segmentation is unavailable.')
+        with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
+             patch('app.dashboard.request', side_effect=response), \
+             patch('app.dashboard.st.file_uploader', return_value=uploaded), \
+             patch('app.dashboard.read_ct', return_value=(np.ones((4,8,8)), (1,1,2))):
+            app=AppTest.from_file(APP).run()
+            app.sidebar.radio[0].set_value('Upload CT').run()
+            next(b for b in app.button if b.label == 'Validate and open report').click().run()
+            self.assertFalse(app.exception, [e.message for e in app.exception])
+            self.assertEqual(app.sidebar.radio[0].value, 'Case Report')
+            self.assertEqual(app.session_state['upload_review']['upload_id'], 'upload-1')
+            self.assertTrue(any(b.label == 'Retry pancreas segmentation' for b in app.button))
+            self.assertTrue(any('segmentation could not complete' in e.value for e in app.error))
 
 
     def test_doctor_profile_has_no_admin_navigation(self):

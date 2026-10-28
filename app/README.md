@@ -172,7 +172,10 @@ data/private/models/P3_nnunet_2d_full/nnUNetTrainer_PanVision__nnUNetPlans__2d/
 
 Alternatively, set `PANVISION_PANCREAS_MODEL_DIR` in the root `.env` to the
 absolute path of that trainer folder. Restart FastAPI after changing model files
-or configuration. On Case Report, click **Run pancreas segmentation**. The backend
+or configuration. After a scan passes validation, pancreas segmentation runs
+automatically before the case report opens. If it fails, the validated scan
+remains available and the report shows a **Retry pancreas segmentation** button.
+The backend
 uses the training preprocessing (LPS, 1.5 × 1.5 × 3 mm, −100 to 300 HU), runs fold 0's
 best checkpoint, and aligns the predicted mask with the uploaded CT. The green
 overlay is a research estimate, not a diagnosis. Local inference accepts scans
