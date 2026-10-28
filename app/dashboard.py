@@ -173,9 +173,12 @@ def imaging_panels(reviewed, key):
                     st.caption(f'Green: predicted pancreas · Slice {z+1} / {len(array)}')
                 elif index == 1 and mask is not None:
                     st.image(upload_lesion_slice(array, mask, z, resolved), width='stretch')
-                    st.caption(f'Coral: predicted lesion · Slice {z+1} / {len(array)}')
+                    st.caption(f'Coral: model-proposed lesion region · Slice {z+1} / {len(array)}')
                     if not mask.any():
-                        st.caption('No lesion region was marked by the model.')
+                        st.caption('No region was marked by the model. This does not rule out a lesion.')
+                    st.caption('Research model · Held-out test: mean lesion Dice 0.384 on 84 annotated cases; '
+                               'false-positive masks on 152 of 234 negative scans (65%). '
+                               'P3 prediction-file provenance is still being checked.')
                 else:
                     detail = ('Run pancreas segmentation to create this overlay.' if index == 0 and reviewed
                               else 'Run lesion segmentation to create this overlay.' if index == 1 and reviewed
@@ -189,13 +192,14 @@ def result_cards(reviewed):
     spacing = reviewed.get('spacing') if reviewed else None
     volume = float(lesion.sum() * np.prod(spacing) / 1000) if lesion is not None else None
     for column, title, value, detail in zip(st.columns(3),
-            ['Prediction results', 'Tumour measurements', 'Top 3 similar cases'],
-            ['Lesion marked' if lesion is not None and lesion.any() else 'No lesion marked' if lesion is not None
+            ['Lesion model output', 'Model mask volume', 'Top 3 similar cases'],
+            ['Model-marked region' if lesion is not None and lesion.any() else 'No region marked' if lesion is not None
              else 'Not analyzed' if reviewed else 'No result yet',
              f'{volume:.2f} cm³' if volume is not None else 'Not available', 'No matches yet'],
-            ['Segmentation output only; this is not a PDAC diagnosis.' if lesion is not None
+            ['Model proposal only; this is not a PDAC diagnosis.' if lesion is not None
              else 'PDAC / Non-PDAC and confidence require a classification model.',
-             'Predicted lesion volume.' if lesion is not None else 'Run lesion segmentation to estimate volume.',
+             'Volume of the model-marked mask, not a confirmed tumour measurement.' if lesion is not None
+             else 'Run lesion segmentation to estimate mask volume.',
              'Reference retrieval requires a trained embedding model.']):
         with column, st.container(border=True):
             st.markdown(f'##### {title}')

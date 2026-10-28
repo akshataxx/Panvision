@@ -3,9 +3,9 @@
 PanVision is a research workspace for reviewing pancreatic CT scans. It combines
 a green-and-cream Streamlit dashboard, a FastAPI backend, and PostgreSQL account,
 upload-history and audit tables. It is an academic prototype, not a clinical
-system. P3 pancreas segmentation can run when its model files and optional
-inference dependencies are installed. Lesion segmentation, classification,
-Grad-CAM and retrieval are not connected; the interface does not invent their results.
+system. P3 pancreas and L2 lesion segmentation can run when their model files
+and inference dependencies are installed. Classification, Grad-CAM and retrieval
+are not connected; the interface does not invent their results.
 
 ## Folder structure
 
@@ -183,8 +183,14 @@ uploaded CT grid. The **Pancreas** tab can also run P3 alone. The backend
 uses the training preprocessing (LPS, 1.5 × 1.5 × 3 mm, −100 to 300 HU), runs fold 0's
 best checkpoint, and aligns both predicted masks with the uploaded CT. Green is
 pancreas; coral is lesion. The lesion volume card measures the predicted mask,
-not a PDAC classification. L2's training-time reference-ROI Dice of 0.3864 is
-not an end-to-end P3→L2 score; that evaluation remains to be reported separately.
+not a PDAC classification or confirmed tumour volume. The optional lesion overlay
+is a model-proposed region, not a diagnosis. On the held-out test split, P3→L2
+had mean lesion Dice 0.384 across 84 annotated lesion scans and marked a region
+in 152 of 234 negative scans (65% false-positive rate). These test figures are
+provisional because the existing P3 prediction folder contains duplicate study
+variants whose source provenance has not been fully audited. L2's training-time
+reference-ROI Dice of 0.3864 uses the reference pancreas mask and should not be
+reported as the end-to-end score.
 Local inference accepts scans up to 32 million voxels and may take several minutes
 on a CPU. The masks live
 only in the current Streamlit session; the PDF still

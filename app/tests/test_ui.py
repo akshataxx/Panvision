@@ -161,7 +161,10 @@ class WorkspaceUITests(unittest.TestCase):
             api.assert_called_with('POST', '/uploads/upload-1/lesion',
                                    files={'file':('scan.nii.gz', b'ct')}, timeout=900)
             np.testing.assert_array_equal(app.session_state['upload_review']['lesion_mask'], lesion)
-            self.assertTrue(any('Coral: predicted lesion' in item.value for item in app.caption))
+            self.assertTrue(any('Coral: model-proposed lesion region' in item.value for item in app.caption))
+            self.assertTrue(any('false-positive masks on 152 of 234' in item.value for item in app.caption))
+            self.assertTrue(any('Model-marked region' in item.value for item in app.markdown))
+            self.assertTrue(any('Model mask volume' in item.value for item in app.markdown))
 
 
     def test_doctor_profile_has_no_admin_navigation(self):
