@@ -45,6 +45,29 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertEqual(api.call_args.kwargs['data']['notes'], 'Review this uploaded scan')
             self.assertTrue(any('prediction is unavailable' in info.value for info in app.info))
 
+    def test_review_notes_show_when_changes_are_unsaved(self):
+        with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
+             patch('app.dashboard.request', return_value=SimpleNamespace(content=b'%PDF-test')) as api:
+            app = AppTest.from_file(APP).run()
+            app.session_state['upload_review'] = {
+                'digest':'digest', 'name':'scan.nii.gz', 'content':b'ct',
+                'array':np.ones((4,8,8)), 'spacing':(1,1,2), 'upload_id':'upload-1',
+            }
+            app.sidebar.radio[0].set_value('Case Report').run()
+            app.text_area[0].set_value('First note').run()
+            self.assertTrue(any('Unsaved changes' in item.value for item in app.warning))
+
+            next(button for button in app.button if button.label == 'Save review notes').click().run()
+            api.assert_called_with('PUT', '/uploads/upload-1/notes', json={'notes':'First note'})
+            self.assertFalse(any('Unsaved changes' in item.value for item in app.warning))
+            self.assertTrue(any('Notes saved' in item.value for item in app.caption))
+
+            app.text_area[0].set_value('Revised note').run()
+            self.assertTrue(any('Unsaved changes' in item.value for item in app.warning))
+            next(button for button in app.button if button.label == 'Prepare PDF').click().run()
+            self.assertFalse(any('Unsaved changes' in item.value for item in app.warning))
+            self.assertTrue(any('Notes saved' in item.value for item in app.caption))
+
     def test_successful_login_opens_home_without_form(self):
         doctor = {'id':1,'name':'ABC','email':'test@example.com'}
         def response(method, path, **kwargs):

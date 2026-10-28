@@ -20,7 +20,8 @@ def navigate(page):
 
 
 def clear_upload():
-    for key in ('upload_review', 'uploaded_report_pdf', 'uploaded_report_notes', 'image_display_mode'):
+    for key in ('upload_review', 'uploaded_report_pdf', 'uploaded_report_notes',
+                'saved_report_notes', 'image_display_mode'):
         st.session_state.pop(key, None)
 
 
@@ -181,10 +182,10 @@ def uploaded_report():
         st.subheader('Review notes')
         notes = st.text_area('Notes for this report', key='uploaded_report_notes', max_chars=10000, height=200,
                              placeholder='Add your observations…')
-        st.caption('Save notes to keep them with this scan’s history. PDF generation also saves the current notes.')
+        notes_status = st.empty()
         if st.button('Save review notes', disabled=not reviewed.get('upload_id'), width='stretch'):
             request('PUT', f'/uploads/{reviewed["upload_id"]}/notes', json={'notes':notes})
-            st.success('Notes saved to your scan history.')
+            st.session_state['saved_report_notes'] = notes
         st.write('**Diagnosis:** Awaiting model analysis')
         st.write('**Segmentation / Grad-CAM:** Not available')
         pdf_key = (reviewed['digest'], notes, reviewed.get('display_mode', 'auto'))
@@ -196,6 +197,13 @@ def uploaded_report():
                 pdf = request('POST', '/uploads/report.pdf',
                               files={'file': (reviewed['name'], reviewed['content'])}, data=report_data).content
                 st.session_state['uploaded_report_pdf'] = (pdf_key, pdf)
+                st.session_state['saved_report_notes'] = notes
+        if notes != st.session_state.get('saved_report_notes', ''):
+            notes_status.warning('Unsaved changes. Save notes or prepare the PDF to keep them with this scan.')
+        elif notes:
+            notes_status.caption('✓ Notes saved to this scan’s history.')
+        else:
+            notes_status.caption('No review notes added yet.')
         prepared = st.session_state.get('uploaded_report_pdf')
         if prepared and prepared[0] == pdf_key:
             st.download_button('Download report · PDF', prepared[1], 'panvision-ct-report.pdf', 'application/pdf', width='stretch')
