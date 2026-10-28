@@ -109,6 +109,26 @@ def imaging_panels(reviewed, key):
         for index, (tab, title) in enumerate(zip(st.tabs(['Pancreas', 'Lesion', 'Grad-CAM']),
                                                  ['Pancreas segmentation', 'Lesion segmentation', 'Grad-CAM'])):
             with tab, st.container(border=True):
+                if key == 'report' and reviewed:
+                    if index == 0:
+                        label = ('Rerun pancreas segmentation' if reviewed.get('pancreas_mask') is not None
+                                 else 'Retry pancreas segmentation' if reviewed.get('pancreas_error')
+                                 else 'Run pancreas segmentation')
+                        if st.button(label, disabled=not reviewed.get('upload_id'), key='run_pancreas_report'):
+                            try:
+                                with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
+                                    run_pancreas(reviewed)
+                                st.rerun()
+                            except (APIError, ValueError) as exc:
+                                if isinstance(exc, SessionExpired):
+                                    raise
+                                reviewed['pancreas_error'] = str(exc)
+                        if reviewed.get('pancreas_error'):
+                            st.error(f'Pancreas segmentation could not complete: {reviewed["pancreas_error"]}')
+                    else:
+                        st.button('Run lesion segmentation' if index == 1 else 'Run Grad-CAM',
+                                  disabled=True, key=f'unavailable_model_{index}')
+                        st.caption('This model is not connected yet.')
                 mask = reviewed.get('pancreas_mask') if reviewed else None
                 if index == 0 and mask is not None:
                     st.image(upload_pancreas_slice(array, mask, z, resolved), width='stretch')
@@ -186,14 +206,6 @@ def upload_ct():
                 clear_upload()
                 st.error(str(exc) if isinstance(exc, APIError) else 'Unable to read this scan. Use a valid finite 3D NIfTI or self-contained MHA file.')
             else:
-                reviewed = st.session_state['upload_review']
-                try:
-                    with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
-                        run_pancreas(reviewed)
-                except (APIError, ValueError) as exc:
-                    if isinstance(exc, SessionExpired):
-                        raise
-                    reviewed['pancreas_error'] = str(exc)
                 navigate('Case Report')
                 st.rerun()
 
@@ -205,25 +217,13 @@ def uploaded_report():
         st.button('Upload CT scan', type='primary', on_click=navigate, args=('Upload CT',))
         return
     heading('Case report', 'Scan evidence, model status, and review notes.')
-    if st.button('Rerun pancreas segmentation' if reviewed.get('pancreas_mask') is not None
-                 else 'Retry pancreas segmentation' if reviewed.get('pancreas_error')
-                 else 'Run pancreas segmentation', disabled=not reviewed.get('upload_id')):
-        try:
-            with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
-                run_pancreas(reviewed)
-        except (APIError, ValueError) as exc:
-            if isinstance(exc, SessionExpired):
-                raise
-            reviewed['pancreas_error'] = str(exc)
-    if reviewed.get('pancreas_error'):
-        st.error(f'Pancreas segmentation could not complete: {reviewed["pancreas_error"]} Use the retry button above.')
     scan_strip(reviewed)
     if reviewed.get('pancreas_mask') is not None:
         st.success('Pancreas segmentation complete. PDAC prediction and lesion segmentation are still unavailable.')
         if not reviewed['pancreas_mask'].any():
             st.warning('The model did not find a pancreas region in this scan.')
     else:
-        st.info('File validation passed. Pancreas segmentation is pending. PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
+        st.info('File validation passed. Choose a model tab and run an available analysis. PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
     array, spacing = reviewed['array'], reviewed['spacing']
     imaging_panels(reviewed, 'report')
     result_cards(reviewed)
