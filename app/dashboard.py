@@ -20,7 +20,8 @@ def navigate(page):
 
 
 def clear_upload():
-    for key in ('upload_review', 'uploaded_report_pdf', 'uploaded_report_notes', 'image_display_mode'):
+    for key in ('upload_review', 'uploaded_report_pdf', 'uploaded_report_notes',
+                'saved_report_notes', 'image_display_mode'):
         st.session_state.pop(key, None)
 
 
@@ -58,38 +59,40 @@ def placeholder(title, detail, symbol='◌'):
 def scan_strip(reviewed):
     array = reviewed['array'] if reviewed else None
     name = reviewed['name'] if reviewed else 'No scan selected'
-    items = [('Scan', name), ('Format', 'CT volume' if reviewed else '—'),
-             ('Slices', str(len(array)) if reviewed else '—'),
-             ('Status', 'Validated' if reviewed else 'Awaiting upload')]
+    items = [('Scan', name), ('Slices', str(len(array)) if reviewed else '—'),
+             ('File validation', 'Passed' if reviewed else 'Awaiting upload'),
+             ('Model analysis', 'Not connected')]
     st.markdown('<div class="scan-strip">'+''.join(
         f'<div><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>'
         for label, value in items)+'</div>', unsafe_allow_html=True)
 
 
 def imaging_panels(reviewed, key):
-    z = None
-    if reviewed:
-        array = reviewed['array']
-        display_mode = st.selectbox('Image display', ['auto', 'normalized', 'hu'],
-                                    format_func=lambda v: {'auto':'Automatic', 'normalized':'Normalized (0–1)', 'hu':'CT window (−100 to 300 HU)'}[v],
-                                    key='image_display_mode')
-        resolved = upload_display_mode(array) if display_mode == 'auto' else display_mode
-        reviewed['display_mode'] = display_mode
-        st.caption('Display: ' + ('Normalized 0–1' if resolved == 'normalized' else 'CT window −100 to 300 HU')
-                   + '. Automatic uses the intensity range; choose a mode if your acquisition scale differs.')
-        z = st.slider('CT slice', 0, len(array)-1, len(array)//2, key=f'{key}_slice_{reviewed["digest"]}')
-    for i, (column, title) in enumerate(zip(st.columns(4, gap='small'),
-                                          ['Input CT scan', 'Pancreas segmentation', 'Lesion segmentation', 'Grad-CAM'])):
-        with column, st.container(border=True):
-            st.markdown(f'<div class="panel-title"><span>0{i+1}</span>{title}</div>', unsafe_allow_html=True)
-            if i == 0 and reviewed:
-                st.image(upload_rgb_slice(array, z, resolved), width='stretch')
-                st.caption(f'Slice {z+1} / {len(array)} · Uploaded CT')
-            elif i == 0:
-                placeholder('Upload a CT scan', 'Your axial image preview appears here.', '⊕')
-            else:
-                placeholder('Awaiting analysis' if reviewed else 'No scan uploaded',
-                            'Model output is not connected.' if reviewed else 'Upload a scan to begin.')
+    image_column, output_column = st.columns([1.8, 1], gap='medium')
+    with image_column, st.container(border=True):
+        st.markdown('<div class="panel-title">Input CT scan</div>', unsafe_allow_html=True)
+        if reviewed:
+            array = reviewed['array']
+            display_mode = st.selectbox('Image display', ['auto', 'normalized', 'hu'],
+                                        format_func=lambda v: {'auto':'Automatic', 'normalized':'Normalized (0–1)', 'hu':'CT window (−100 to 300 HU)'}[v],
+                                        key='image_display_mode')
+            resolved = upload_display_mode(array) if display_mode == 'auto' else display_mode
+            reviewed['display_mode'] = display_mode
+            st.caption('Display: ' + ('Normalized 0–1' if resolved == 'normalized' else 'CT window −100 to 300 HU')
+                       + '. Automatic uses the intensity range; choose a mode if your acquisition scale differs.')
+            z = st.slider('CT slice', 0, len(array)-1, len(array)//2,
+                          key=f'{key}_slice_{reviewed["digest"]}')
+            st.image(upload_rgb_slice(array, z, resolved), width='stretch')
+            st.caption(f'Slice {z+1} / {len(array)} · Uploaded CT')
+        else:
+            placeholder('Upload a CT scan', 'Your axial image preview appears here.', '⊕')
+    with output_column:
+        st.markdown('##### Model output')
+        for tab, title in zip(st.tabs(['Pancreas', 'Lesion', 'Grad-CAM']),
+                              ['Pancreas segmentation', 'Lesion segmentation', 'Grad-CAM']):
+            with tab, st.container(border=True):
+                placeholder(title, 'Model output is not connected.' if reviewed else 'Upload a scan to begin.')
+        st.caption('These views will appear when trained models are connected. File validation alone does not generate results.')
 
 
 def result_cards(reviewed):
@@ -166,7 +169,7 @@ def uploaded_report():
         return
     heading('Case report', 'Scan evidence, model status, and review notes.')
     scan_strip(reviewed)
-    st.info('Scan validated · PDAC / Non-PDAC prediction is unavailable until a trained model is connected.')
+    st.info('File validation passed. Model analysis has not run: PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
     array, spacing = reviewed['array'], reviewed['spacing']
     imaging_panels(reviewed, 'report')
     result_cards(reviewed)
@@ -181,10 +184,10 @@ def uploaded_report():
         st.subheader('Review notes')
         notes = st.text_area('Notes for this report', key='uploaded_report_notes', max_chars=10000, height=200,
                              placeholder='Add your observations…')
-        st.caption('Save notes to keep them with this scan’s history. PDF generation also saves the current notes.')
+        notes_status = st.empty()
         if st.button('Save review notes', disabled=not reviewed.get('upload_id'), width='stretch'):
             request('PUT', f'/uploads/{reviewed["upload_id"]}/notes', json={'notes':notes})
-            st.success('Notes saved to your scan history.')
+            st.session_state['saved_report_notes'] = notes
         st.write('**Diagnosis:** Awaiting model analysis')
         st.write('**Segmentation / Grad-CAM:** Not available')
         pdf_key = (reviewed['digest'], notes, reviewed.get('display_mode', 'auto'))
@@ -196,6 +199,13 @@ def uploaded_report():
                 pdf = request('POST', '/uploads/report.pdf',
                               files={'file': (reviewed['name'], reviewed['content'])}, data=report_data).content
                 st.session_state['uploaded_report_pdf'] = (pdf_key, pdf)
+                st.session_state['saved_report_notes'] = notes
+        if notes != st.session_state.get('saved_report_notes', ''):
+            notes_status.warning('Unsaved changes. Save notes or prepare the PDF to keep them with this scan.')
+        elif notes:
+            notes_status.caption('✓ Notes saved to this scan’s history.')
+        else:
+            notes_status.caption('No review notes added yet.')
         prepared = st.session_state.get('uploaded_report_pdf')
         if prepared and prepared[0] == pdf_key:
             st.download_button('Download report · PDF', prepared[1], 'panvision-ct-report.pdf', 'application/pdf', width='stretch')
