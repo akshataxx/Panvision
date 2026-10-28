@@ -271,8 +271,12 @@ async def lesion_upload(upload_id: UUID, doctor: Annotated[dict, Depends(current
 async def upload_report(doctor: Annotated[dict, Depends(current_doctor)], file: Annotated[UploadFile, File()],
                         notes: Annotated[str, Form(max_length=10000)] = '',
                         display_mode: Annotated[Literal['auto', 'normalized', 'hu'], Form()] = 'auto',
-                        upload_id: Annotated[UUID | None, Form()] = None):
+                        upload_id: Annotated[UUID | None, Form()] = None,
+                        pancreas_mask: Annotated[UploadFile | None, File()] = None):
     from starlette.concurrency import run_in_threadpool
+    recorded_upload = upload_id is not None
+    if pancreas_mask is not None and not recorded_upload:
+        raise HTTPException(422, 'A validated upload is required for a pancreas overlay.')
     if upload_id is None:
         array, spacing, metadata, upload_id = await tracked_upload(file, doctor)
     else:
@@ -283,8 +287,16 @@ async def upload_report(doctor: Annotated[dict, Depends(current_doctor)], file: 
         array, spacing, metadata = await read_upload(file)
         if record['sha256'] != metadata['sha256'] or record['status'] != 'validated':
             raise HTTPException(409, 'Uploaded file does not match the selected history record.')
+    mask = None
+    if pancreas_mask is not None:
+        expected = (array.size + 7) // 8
+        packed = await pancreas_mask.read(expected + 1)
+        if len(packed) != expected or await pancreas_mask.read(1):
+            raise HTTPException(422, 'Pancreas mask size does not match the uploaded scan.')
+        mask = np.unpackbits(np.frombuffer(packed, dtype=np.uint8), count=array.size).reshape(array.shape).astype(bool)
     case = {'study_id': str(upload_id), 'source': 'upload', 'diagnosis': 'Unavailable'}
-    pdf = await run_in_threadpool(build_pdf, case, array, None, spacing, notes, display_mode=display_mode)
+    pdf = await run_in_threadpool(build_pdf, case, array, None, spacing, notes,
+                                  display_mode=display_mode, pancreas_mask=mask)
     try:
         await run_in_threadpool(db.record_report, upload_id, doctor['id'], metadata['sha256'], notes)
     except LookupError:
