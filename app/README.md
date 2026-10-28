@@ -3,8 +3,9 @@
 PanVision is a research workspace for reviewing pancreatic CT scans. It combines
 a green-and-cream Streamlit dashboard, a FastAPI backend, and PostgreSQL account,
 upload-history and audit tables. It is an academic prototype, not a clinical
-system. Trained classification, segmentation, Grad-CAM and retrieval models are
-not connected; the interface does not invent diagnoses or model results.
+system. P3 pancreas segmentation can run when its model files and optional
+inference dependencies are installed. Lesion segmentation, classification,
+Grad-CAM and retrieval are not connected; the interface does not invent their results.
 
 ## Folder structure
 
@@ -62,9 +63,9 @@ The upload-first workflow needs no OneDrive dataset directory.
 
 | Screen | Behavior |
 | --- | --- |
-| Home | Scan metadata strip, four imaging panels, prediction/measurement/reference cards, findings and actions; empty until upload |
+| Home | Scan metadata strip, CT preview, model-output tabs, prediction/measurement/reference cards, findings and actions |
 | Upload CT | NIfTI/MHA uploader, validation and automatic navigation to the report |
-| Case Report | Uploaded CT, slice/display controls, geometry, saved notes and PDF generation/download |
+| Case Report | Uploaded CT, optional P3 pancreas mask overlay, slice/display controls, geometry, saved notes and PDF generation/download |
 | Past Cases | Signed-in doctor's persistent own-upload history, validation status and event timeline |
 | Similar Cases | Explicit unavailable state until trained retrieval is connected |
 | My Profile | Own name/email/role plus current-password-verified password changes for both roles |
@@ -154,6 +155,32 @@ so set it explicitly when using 8001. Sign in as the administrator and add docto
 through Administration → Add doctor. A private `create-doctor` maintenance CLI
 also exists for operators with database credentials; it is not public registration.
 
+### Optional: run P3 pancreas segmentation
+
+Install the inference dependencies in the same virtual environment:
+
+```bash
+.venv/bin/python -m pip install -r app/inference-requirements.txt
+```
+
+Copy the **full** P3 nnU-Net trainer folder into the Git-ignored location below.
+It needs `plans.json`, `dataset.json`, and `fold_0/checkpoint_best.pth`:
+
+```text
+data/private/models/P3_nnunet_2d_full/nnUNetTrainer_PanVision__nnUNetPlans__2d/
+```
+
+Alternatively, set `PANVISION_PANCREAS_MODEL_DIR` in the root `.env` to the
+absolute path of that trainer folder. Restart FastAPI after changing model files
+or configuration. On Case Report, click **Run pancreas segmentation**. The backend
+uses the training preprocessing (LPS, 1.5 × 1.5 × 3 mm, −100 to 300 HU), runs fold 0's
+best checkpoint, and aligns the predicted mask with the uploaded CT. The green
+overlay is a research estimate, not a diagnosis. Local inference accepts scans
+up to 32 million voxels and may take several minutes on a CPU. The mask lives
+only in the current Streamlit session; the PDF still
+contains the CT preview and notes, without the mask. Persistent results belong
+to the later case-storage work.
+
 ## PostgreSQL tables
 
 | Table | Contents |
@@ -193,7 +220,7 @@ to an upload ID requires matching ownership and file digest.
 
 CT data, masks and model weights belong in separately configured private file
 storage, not Git or PostgreSQL. Upload metadata/notes are persistent; CT files
-remain temporary. Trained inference and persistent scan/PDF storage are future
+remain temporary. Lesion/classification inference and persistent scan/PDF storage are future
 integration work. Deployments still need HTTPS, trusted PostgreSQL TLS,
 proxy upload-size limits, login/upload rate limiting, backups, retention controls
 and appropriate authorization before handling identifiable patient data.
@@ -207,6 +234,7 @@ and appropriate authorization before handling identifiable patient data.
 | `GET /auth/me`, `GET /auth/session` | Own profile; non-renewing session check |
 | `POST /auth/password` | Change own password and revoke sessions |
 | `POST /uploads/validate` | Validate multipart CT and return its recorded upload ID |
+| `POST /uploads/{id}/pancreas` | Run P3 pancreas segmentation for a doctor's byte-matching validated upload |
 | `POST /uploads/report.pdf` | Generate PDF from CT, notes, display mode and optional recorded upload ID |
 | `GET /me/uploads` | Own paginated upload history |
 | `GET /uploads/{id}`, `PUT /uploads/{id}/notes` | Authorized detail and owner-only notes |

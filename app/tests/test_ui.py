@@ -1,6 +1,7 @@
 """Upload-first UI workflows without database or shared-drive access."""
 from pathlib import Path
 from types import SimpleNamespace
+import io
 import unittest
 from unittest.mock import patch
 
@@ -40,7 +41,7 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertFalse(app.exception)
             self.assertEqual([tab.label for tab in app.tabs], ['Pancreas', 'Lesion', 'Grad-CAM'])
             self.assertTrue(any('File validation</span><strong>Passed' in item.value and
-                                'Model analysis</span><strong>Not connected' in item.value
+                                'Model analysis</span><strong>Not run' in item.value
                                 for item in app.markdown))
             app.text_area[0].set_value('Review this uploaded scan').run()
             next(b for b in app.button if b.label == 'Prepare PDF').click().run()
@@ -71,6 +72,26 @@ class WorkspaceUITests(unittest.TestCase):
             next(button for button in app.button if button.label == 'Prepare PDF').click().run()
             self.assertFalse(any('Unsaved changes' in item.value for item in app.warning))
             self.assertTrue(any('Notes saved' in item.value for item in app.caption))
+
+    def test_pancreas_segmentation_appears_in_report(self):
+        mask = np.zeros((4,8,8), dtype=np.uint8)
+        mask[:,2:5,3:6] = 1
+        output = io.BytesIO()
+        np.savez_compressed(output, mask=mask)
+        with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
+             patch('app.dashboard.request', return_value=SimpleNamespace(content=output.getvalue())) as api:
+            app = AppTest.from_file(APP).run()
+            app.session_state['upload_review'] = {
+                'digest':'digest', 'name':'scan.nii.gz', 'content':b'ct',
+                'array':np.ones((4,8,8)), 'spacing':(1,1,2), 'upload_id':'upload-1',
+            }
+            app.sidebar.radio[0].set_value('Case Report').run()
+            next(button for button in app.button if button.label == 'Run pancreas segmentation').click().run()
+            self.assertFalse(app.exception, [error.message for error in app.exception])
+            api.assert_called_with('POST', '/uploads/upload-1/pancreas',
+                                   files={'file':('scan.nii.gz', b'ct')}, timeout=600)
+            np.testing.assert_array_equal(app.session_state['upload_review']['pancreas_mask'], mask)
+            self.assertTrue(any('Pancreas complete' in item.value for item in app.markdown))
 
     def test_successful_login_opens_home_without_form(self):
         doctor = {'id':1,'name':'ABC','email':'test@example.com'}

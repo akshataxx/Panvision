@@ -2,7 +2,9 @@
 from typing import Annotated, Literal
 from uuid import UUID
 import hashlib
+import io
 
+import numpy as np
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response, UploadFile, File, Form
 from fastapi.exceptions import RequestValidationError
@@ -14,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
 from app import database as db
 from app.data import case_index, default_root, load_case
 from app.reporting import build_pdf
+from app.pancreas import ModelUnavailable, ScanTooLarge, model_available, segment_pancreas
 
 api = FastAPI(title='PanVision Research API', version='0.1.0')
 bearer = HTTPBearer(auto_error=False)
@@ -205,7 +208,32 @@ async def tracked_upload(file, doctor):
 async def validate_upload(doctor: Annotated[dict, Depends(current_doctor)], file: Annotated[UploadFile, File()]):
     array, spacing, metadata, upload_id = await tracked_upload(file, doctor)
     return {'valid': True, 'upload_id': upload_id, 'shape_zyx': list(array.shape),
-            'spacing_xyz_mm': list(spacing), 'inference_available': False}
+            'spacing_xyz_mm': list(spacing), 'inference_available': model_available()}
+
+
+@api.post('/uploads/{upload_id}/pancreas')
+async def pancreas_upload(upload_id: UUID, doctor: Annotated[dict, Depends(current_doctor)],
+                          file: Annotated[UploadFile, File()]):
+    """Analyze only the doctor's previously validated, byte-matching upload."""
+    try:
+        record = await run_in_threadpool(db.get_upload, upload_id, doctor['id'])
+    except LookupError:
+        raise HTTPException(404, 'Upload not found.')
+    array, spacing, metadata = await read_upload(file)
+    if record['status'] != 'validated' or record['sha256'] != metadata['sha256']:
+        raise HTTPException(409, 'Uploaded file does not match the selected history record.')
+    try:
+        mask = await run_in_threadpool(segment_pancreas, array, spacing)
+    except ScanTooLarge:
+        raise HTTPException(413, 'Scan is too large for local pancreas segmentation.')
+    except ModelUnavailable:
+        raise HTTPException(503, 'Pancreas model is not configured on the backend.')
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(503, 'Pancreas segmentation could not complete for this scan.')
+    output = io.BytesIO()
+    np.savez_compressed(output, mask=mask.astype(np.uint8))
+    return Response(output.getvalue(), media_type='application/octet-stream',
+                    headers={'X-PanVision-Model': 'P3_nnunet_2d_full/fold_0/checkpoint_best'})
 
 
 @api.post('/uploads/report.pdf')
