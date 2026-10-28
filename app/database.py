@@ -9,8 +9,12 @@ import secrets
 import uuid
 import psycopg
 from psycopg.rows import dict_row
+from dotenv import load_dotenv
 import time
 from contextlib import contextmanager
+
+
+load_dotenv(Path(__file__).resolve().parents[1] / '.env')
 
 
 SESSION_IDLE_SECONDS = 20 * 60
@@ -330,19 +334,19 @@ def connection_error_message(exc):
     state = getattr(exc, 'sqlstate', None)
     message = str(exc).lower()
     if state == '28P01' or 'password authentication failed' in message:
-        return 'Authentication failed: check the Admin1 password and rebuild PANVISION_DATABASE_URL.'
+        return 'Authentication failed: check the database credentials in PANVISION_DATABASE_URL.'
     if state == '3D000' or ('database' in message and 'does not exist' in message):
-        return 'Database missing: create panvision under the server Databases page.'
+        return 'Database missing: check the database name in PANVISION_DATABASE_URL.'
     if state == '42501' or 'permission denied' in message:
         return 'Permission denied: the database user needs access to the database and permission to create tables in the public schema.'
     if 'no pg_hba.conf entry' in message or 'not allowed to access' in message:
-        return 'Connection rejected: check the Azure Networking firewall rule for your current public IP and the required TLS settings.'
+        return 'Connection rejected: check database network access and TLS settings.'
     if any(word in message for word in ('certificate', 'ssl', 'tls')):
-        return 'TLS connection failed: check the Azure server TLS settings and client certificate configuration.'
+        return 'TLS connection failed: check the database TLS settings and certificate configuration.'
     if any(word in message for word in ('could not translate host', 'name or service not known', 'nodename nor servname', 'failed to resolve')):
         return 'Hostname lookup failed: check the server hostname, internet connection and DNS.'
     if 'timeout' in message or 'timed out' in message:
-        return 'Connection timed out: check server status Ready, public networking, your current IP firewall rule, and whether your network blocks port 5432.'
+        return 'Connection timed out: check database availability, network access, and whether your network blocks port 5432.'
     if 'refused' in message:
         return 'Connection refused: check server status, hostname, port 5432 and network access.'
     return 'PostgreSQL connection failed. Check server status, PostgreSQL password authentication, networking and connection settings.'
