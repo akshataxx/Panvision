@@ -83,6 +83,27 @@ class BackendTests(unittest.TestCase):
                 self.assertTrue(response.content.startswith(b'%PDF'))
                 self.assertEqual(response.headers['content-type'],'application/pdf')
 
+    def test_uploaded_report_accepts_matching_pancreas_mask_only(self):
+        uid = '11111111-1111-4111-8111-111111111111'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'scan.nii.gz'
+            sitk.WriteImage(sitk.GetImageFromArray(np.ones((4, 8, 8), dtype=np.float32)), str(path))
+            content = path.read_bytes()
+            record = {'sha256': hashlib.sha256(content).hexdigest(), 'status': 'validated'}
+            mask = np.zeros((4, 8, 8), dtype=bool)
+            mask[1, 2:5, 3:6] = True
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.build_pdf', return_value=b'%PDF-test') as build:
+                response = self.client.post('/uploads/report.pdf', headers=self.headers,
+                    files={'file': ('scan.nii.gz', content),
+                           'pancreas_mask': ('pancreas.mask', np.packbits(mask.reshape(-1)).tobytes())},
+                    data={'upload_id': uid})
+                self.assertEqual(response.status_code, 200, response.text)
+                np.testing.assert_array_equal(build.call_args.kwargs['pancreas_mask'], mask)
+                self.assertEqual(self.client.post('/uploads/report.pdf', headers=self.headers,
+                    files={'file': ('scan.nii.gz', content), 'pancreas_mask': ('pancreas.mask', b'x')},
+                    data={'upload_id': uid}).status_code, 422)
+
     def test_pancreas_mask_requires_owned_matching_upload(self):
         uid = '11111111-1111-4111-8111-111111111111'
         with tempfile.TemporaryDirectory() as directory:

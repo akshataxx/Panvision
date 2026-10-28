@@ -306,14 +306,20 @@ def uploaded_report():
         st.write('**Pancreas segmentation:** ' + ('Complete' if reviewed.get('pancreas_mask') is not None else 'Not run'))
         st.write('**Lesion segmentation:** ' + ('Complete' if reviewed.get('lesion_mask') is not None else 'Not run'))
         st.write('**Grad-CAM:** Not available')
-        pdf_key = (reviewed['digest'], notes, reviewed.get('display_mode', 'auto'))
+        pancreas_mask = reviewed.get('pancreas_mask')
+        pdf_key = (reviewed['digest'], notes, reviewed.get('display_mode', 'auto'),
+                   id(pancreas_mask))
         if st.button('Prepare PDF', type='primary', width='stretch'):
             with st.spinner('Preparing report…'):
                 report_data = {'notes':notes, 'display_mode':reviewed.get('display_mode','auto')}
                 if reviewed.get('upload_id'):
                     report_data['upload_id'] = reviewed['upload_id']
+                files = {'file': (reviewed['name'], reviewed['content'])}
+                if pancreas_mask is not None:
+                    packed = np.packbits(pancreas_mask.reshape(-1)).tobytes()
+                    files['pancreas_mask'] = ('pancreas.mask', packed)
                 pdf = request('POST', '/uploads/report.pdf',
-                              files={'file': (reviewed['name'], reviewed['content'])}, data=report_data).content
+                              files=files, data=report_data).content
                 st.session_state['uploaded_report_pdf'] = (pdf_key, pdf)
                 st.session_state['saved_report_notes'] = notes
         if notes != st.session_state.get('saved_report_notes', ''):

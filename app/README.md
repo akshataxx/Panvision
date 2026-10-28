@@ -192,10 +192,9 @@ variants whose source provenance has not been fully audited. L2's training-time
 reference-ROI Dice of 0.3864 uses the reference pancreas mask and should not be
 reported as the end-to-end score.
 Local inference accepts scans up to 32 million voxels and may take several minutes
-on a CPU. The masks live
-only in the current Streamlit session; the PDF still
-contains the CT preview and notes, without the mask. Persistent results belong
-to the later case-storage work.
+on a CPU. The masks live only in the current Streamlit session. The PDF includes
+the CT preview, notes, and a pancreas overlay when the model marks a region, but
+no lesion overlay. Persistent results belong to the later case-storage work.
 
 ## PostgreSQL tables
 

@@ -50,6 +50,27 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertEqual(api.call_args.kwargs['data']['notes'], 'Review this uploaded scan')
             self.assertTrue(any('prediction is unavailable' in info.value for info in app.info))
 
+    def test_pdf_sends_pancreas_mask_but_not_lesion_mask(self):
+        pancreas = np.zeros((4, 8, 8), dtype=bool)
+        pancreas[1, 2:5, 3:6] = True
+        lesion = np.ones((4, 8, 8), dtype=bool)
+        with patch('app.dashboard.require_doctor', return_value={'id': 1, 'name': 'ABC'}), \
+             patch('app.dashboard.request', return_value=SimpleNamespace(content=b'%PDF-test')) as api:
+            app = AppTest.from_file(APP).run()
+            app.session_state['upload_review'] = {
+                'digest': 'digest', 'name': 'scan.nii.gz', 'content': b'ct',
+                'array': np.ones((4, 8, 8)), 'spacing': (1, 1, 2), 'upload_id': 'upload-1',
+                'pancreas_mask': pancreas, 'lesion_mask': lesion,
+            }
+            app.sidebar.radio[0].set_value('Case Report').run()
+            next(button for button in app.button if button.label == 'Prepare PDF').click().run()
+            files = api.call_args.kwargs['files']
+            self.assertEqual(set(files), {'file', 'pancreas_mask'})
+            np.testing.assert_array_equal(
+                np.unpackbits(np.frombuffer(files['pancreas_mask'][1], dtype=np.uint8), count=pancreas.size).reshape(pancreas.shape),
+                pancreas,
+            )
+
     def test_review_notes_show_when_changes_are_unsaved(self):
         with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
              patch('app.dashboard.request', return_value=SimpleNamespace(content=b'%PDF-test')) as api:
