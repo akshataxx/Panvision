@@ -6,11 +6,12 @@ import csv
 import io
 from pathlib import Path
 
+import numpy as np
 import streamlit as st
 
 from app.api_client import request, sign_out, APIError, SessionExpired
 from app.auth import require_doctor, idle_watchdog
-from app.data import upload_rgb_slice, upload_display_mode
+from app.data import upload_rgb_slice, upload_display_mode, upload_pancreas_slice, upload_lesion_slice
 from app.validation import read_ct
 
 
@@ -20,7 +21,8 @@ def navigate(page):
 
 
 def clear_upload():
-    for key in ('upload_review', 'uploaded_report_pdf', 'uploaded_report_notes', 'image_display_mode'):
+    for key in ('upload_review', 'uploaded_report_pdf', 'uploaded_report_notes',
+                'saved_report_notes', 'image_display_mode'):
         st.session_state.pop(key, None)
 
 
@@ -38,6 +40,38 @@ def accept_upload(name, content):
         'digest': hashlib.sha256(content).hexdigest(), 'name': name,
         'array': array, 'spacing': spacing, 'content': content,
     }
+
+
+def run_pancreas(reviewed):
+    response = request('POST', f'/uploads/{reviewed["upload_id"]}/pancreas',
+                       files={'file': (reviewed['name'], reviewed['content'])}, timeout=600)
+    try:
+        with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
+            mask = result['mask'].astype(bool)
+        if mask.shape != reviewed['array'].shape:
+            raise ValueError('Mask shape does not match the scan.')
+    except (OSError, KeyError, ValueError) as exc:
+        raise ValueError('The backend returned an invalid pancreas mask.') from exc
+    reviewed['pancreas_mask'] = mask
+    reviewed.pop('pancreas_error', None)
+
+
+def run_lesion(reviewed):
+    response = request('POST', f'/uploads/{reviewed["upload_id"]}/lesion',
+                       files={'file': (reviewed['name'], reviewed['content'])}, timeout=900)
+    try:
+        with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
+            pancreas = result['pancreas'].astype(bool)
+            lesion = result['lesion'].astype(bool)
+        if pancreas.shape != reviewed['array'].shape or lesion.shape != reviewed['array'].shape:
+            raise ValueError('Mask shape does not match the scan.')
+    except (OSError, KeyError, ValueError) as exc:
+        raise ValueError('The backend returned invalid segmentation masks.') from exc
+    reviewed['pancreas_mask'] = pancreas
+    reviewed['lesion_mask'] = lesion
+    if lesion.any():
+        reviewed['jump_to_lesion'] = True
+    reviewed.pop('lesion_error', None)
 
 
 def heading(title, subtitle):
@@ -58,9 +92,11 @@ def placeholder(title, detail, symbol='◌'):
 def scan_strip(reviewed):
     array = reviewed['array'] if reviewed else None
     name = reviewed['name'] if reviewed else 'No scan selected'
-    items = [('Scan', name), ('Format', 'CT volume' if reviewed else '—'),
-             ('Slices', str(len(array)) if reviewed else '—'),
-             ('Status', 'Validated' if reviewed else 'Awaiting upload')]
+    items = [('Scan', name), ('Slices', str(len(array)) if reviewed else '—'),
+             ('File validation', 'Passed' if reviewed else 'Awaiting upload'),
+             ('Model analysis', 'Pancreas + lesion complete' if reviewed and reviewed.get('lesion_mask') is not None
+              else 'Pancreas complete' if reviewed and reviewed.get('pancreas_mask') is not None
+              else 'Not run' if reviewed else 'Awaiting upload')]
     st.markdown('<div class="scan-strip">'+''.join(
         f'<div><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>'
         for label, value in items)+'</div>', unsafe_allow_html=True)
@@ -68,36 +104,98 @@ def scan_strip(reviewed):
 
 def imaging_panels(reviewed, key):
     z = None
-    if reviewed:
-        array = reviewed['array']
-        display_mode = st.selectbox('Image display', ['auto', 'normalized', 'hu'],
-                                    format_func=lambda v: {'auto':'Automatic', 'normalized':'Normalized (0–1)', 'hu':'CT window (−100 to 300 HU)'}[v],
-                                    key='image_display_mode')
-        resolved = upload_display_mode(array) if display_mode == 'auto' else display_mode
-        reviewed['display_mode'] = display_mode
-        st.caption('Display: ' + ('Normalized 0–1' if resolved == 'normalized' else 'CT window −100 to 300 HU')
-                   + '. Automatic uses the intensity range; choose a mode if your acquisition scale differs.')
-        z = st.slider('CT slice', 0, len(array)-1, len(array)//2, key=f'{key}_slice_{reviewed["digest"]}')
-    for i, (column, title) in enumerate(zip(st.columns(4, gap='small'),
-                                          ['Input CT scan', 'Pancreas segmentation', 'Lesion segmentation', 'Grad-CAM'])):
-        with column, st.container(border=True):
-            st.markdown(f'<div class="panel-title"><span>0{i+1}</span>{title}</div>', unsafe_allow_html=True)
-            if i == 0 and reviewed:
-                st.image(upload_rgb_slice(array, z, resolved), width='stretch')
-                st.caption(f'Slice {z+1} / {len(array)} · Uploaded CT')
-            elif i == 0:
-                placeholder('Upload a CT scan', 'Your axial image preview appears here.', '⊕')
-            else:
-                placeholder('Awaiting analysis' if reviewed else 'No scan uploaded',
-                            'Model output is not connected.' if reviewed else 'Upload a scan to begin.')
+    resolved = None
+    image_column, output_column = st.columns([1.8, 1], gap='medium')
+    with image_column, st.container(border=True):
+        st.markdown('<div class="panel-title">Input CT scan</div>', unsafe_allow_html=True)
+        if reviewed:
+            array = reviewed['array']
+            display_mode = st.selectbox('Image display', ['auto', 'normalized', 'hu'],
+                                        format_func=lambda v: {'auto':'Automatic', 'normalized':'Normalized (0–1)', 'hu':'CT window (−100 to 300 HU)'}[v],
+                                        key='image_display_mode')
+            resolved = upload_display_mode(array) if display_mode == 'auto' else display_mode
+            reviewed['display_mode'] = display_mode
+            st.caption('Display: ' + ('Normalized 0–1' if resolved == 'normalized' else 'CT window −100 to 300 HU')
+                       + '. Automatic uses the intensity range; choose a mode if your acquisition scale differs.')
+            slice_key = f'{key}_slice_{reviewed["digest"]}'
+            if reviewed.pop('jump_to_lesion', False):
+                st.session_state[slice_key] = int(reviewed['lesion_mask'].sum(axis=(1, 2)).argmax())
+            elif slice_key not in st.session_state:
+                st.session_state[slice_key] = len(array) // 2
+            z = st.slider('CT slice', 0, len(array)-1, key=slice_key)
+            st.image(upload_rgb_slice(array, z, resolved), width='stretch')
+            st.caption(f'Slice {z+1} / {len(array)} · Uploaded CT')
+        else:
+            placeholder('Upload a CT scan', 'Your axial image preview appears here.', '⊕')
+    with output_column:
+        st.markdown('##### Model output')
+        for index, (tab, title) in enumerate(zip(st.tabs(['Pancreas', 'Lesion', 'Grad-CAM']),
+                                                 ['Pancreas segmentation', 'Lesion segmentation', 'Grad-CAM'])):
+            with tab, st.container(border=True):
+                if key == 'report' and reviewed:
+                    if index == 0:
+                        label = ('Rerun pancreas segmentation' if reviewed.get('pancreas_mask') is not None
+                                 else 'Retry pancreas segmentation' if reviewed.get('pancreas_error')
+                                 else 'Run pancreas segmentation')
+                        if st.button(label, disabled=not reviewed.get('upload_id'), key='run_pancreas_report'):
+                            try:
+                                with st.spinner('Running pancreas segmentation… this may take several minutes on a CPU.'):
+                                    run_pancreas(reviewed)
+                                st.rerun()
+                            except (APIError, ValueError) as exc:
+                                if isinstance(exc, SessionExpired):
+                                    raise
+                                reviewed['pancreas_error'] = str(exc)
+                        if reviewed.get('pancreas_error'):
+                            st.error(f'Pancreas segmentation could not complete: {reviewed["pancreas_error"]}')
+                    elif index == 1:
+                        label = ('Rerun lesion segmentation' if reviewed.get('lesion_mask') is not None
+                                 else 'Retry lesion segmentation' if reviewed.get('lesion_error')
+                                 else 'Run lesion segmentation')
+                        if st.button(label, disabled=not reviewed.get('upload_id'), key='run_lesion_report'):
+                            try:
+                                with st.spinner('Running pancreas and lesion segmentation… this may take several minutes.'):
+                                    run_lesion(reviewed)
+                                st.rerun()
+                            except (APIError, ValueError) as exc:
+                                if isinstance(exc, SessionExpired):
+                                    raise
+                                reviewed['lesion_error'] = str(exc)
+                        if reviewed.get('lesion_error'):
+                            st.error(f'Lesion segmentation could not complete: {reviewed["lesion_error"]}')
+                    else:
+                        st.button('Run Grad-CAM', disabled=True, key='unavailable_model_2')
+                        st.caption('This model is not connected yet.')
+                mask = (reviewed.get('pancreas_mask' if index == 0 else 'lesion_mask')
+                        if reviewed and index in (0, 1) else None)
+                if index == 0 and mask is not None:
+                    st.image(upload_pancreas_slice(array, mask, z, resolved), width='stretch')
+                    st.caption(f'Green: predicted pancreas · Slice {z+1} / {len(array)}')
+                elif index == 1 and mask is not None:
+                    st.image(upload_lesion_slice(array, mask, z, resolved), width='stretch')
+                    st.caption(f'Coral: predicted lesion · Slice {z+1} / {len(array)}')
+                    if not mask.any():
+                        st.caption('No lesion region was marked by the model.')
+                else:
+                    detail = ('Run pancreas segmentation to create this overlay.' if index == 0 and reviewed
+                              else 'Run lesion segmentation to create this overlay.' if index == 1 and reviewed
+                              else 'Model output is not connected.' if reviewed else 'Upload a scan to begin.')
+                    placeholder(title, detail)
+        st.caption('Pancreas and lesion overlays are model estimates for research review; they are not a diagnosis.')
 
 
 def result_cards(reviewed):
+    lesion = reviewed.get('lesion_mask') if reviewed else None
+    spacing = reviewed.get('spacing') if reviewed else None
+    volume = float(lesion.sum() * np.prod(spacing) / 1000) if lesion is not None else None
     for column, title, value, detail in zip(st.columns(3),
             ['Prediction results', 'Tumour measurements', 'Top 3 similar cases'],
-            ['Not analyzed' if reviewed else 'No result yet', 'Not available', 'No matches yet'],
-            ['PDAC / Non-PDAC and confidence require model inference.',
-             'Diameter, volume and location require a predicted lesion mask.',
+            ['Lesion marked' if lesion is not None and lesion.any() else 'No lesion marked' if lesion is not None
+             else 'Not analyzed' if reviewed else 'No result yet',
+             f'{volume:.2f} cm³' if volume is not None else 'Not available', 'No matches yet'],
+            ['Segmentation output only; this is not a PDAC diagnosis.' if lesion is not None
+             else 'PDAC / Non-PDAC and confidence require a classification model.',
+             'Predicted lesion volume.' if lesion is not None else 'Run lesion segmentation to estimate volume.',
              'Reference retrieval requires a trained embedding model.']):
         with column, st.container(border=True):
             st.markdown(f'##### {title}')
@@ -120,14 +218,22 @@ def home(doctor):
         st.markdown('##### Key findings')
         if reviewed:
             st.write('The uploaded scan passed structural validation.')
-            st.caption('Diagnosis and AI-generated findings are pending. File validation does not establish a diagnosis.')
+            if reviewed.get('lesion_mask') is not None:
+                st.caption('Model-generated pancreas and lesion outlines are available. No diagnosis is inferred.')
+            elif reviewed.get('pancreas_mask') is not None:
+                st.caption('A model-generated pancreas outline is available. Run lesion segmentation to inspect lesions.')
+            else:
+                st.caption('Diagnosis and AI-generated findings are pending. File validation does not establish a diagnosis.')
         else:
             st.write('No scan has been uploaded.')
             st.caption('Start by uploading a CT. Findings and reports remain empty until a valid scan is available.')
     with middle, st.container(border=True):
         st.markdown('##### Scan information')
         st.write('**Source:** Uploaded scan' if reviewed else '**Source:** —')
-        st.write('**Inference:** Not connected')
+        st.write('**Pancreas segmentation:** ' + ('Complete' if reviewed and reviewed.get('pancreas_mask') is not None
+                                                  else 'Not run' if reviewed else 'Awaiting upload'))
+        st.write('**Lesion segmentation:** ' + ('Complete' if reviewed and reviewed.get('lesion_mask') is not None
+                                                 else 'Not run' if reviewed else 'Awaiting upload'))
         st.caption('Temporary review · Research use only')
     with right, st.container(border=True):
         st.markdown('##### Actions')
@@ -166,7 +272,14 @@ def uploaded_report():
         return
     heading('Case report', 'Scan evidence, model status, and review notes.')
     scan_strip(reviewed)
-    st.info('Scan validated · PDAC / Non-PDAC prediction is unavailable until a trained model is connected.')
+    if reviewed.get('lesion_mask') is not None:
+        st.success('Pancreas and lesion segmentation complete. These masks are research estimates, not a diagnosis.')
+    elif reviewed.get('pancreas_mask') is not None:
+        st.success('Pancreas segmentation complete. Run lesion segmentation in the Lesion tab.')
+        if not reviewed['pancreas_mask'].any():
+            st.warning('The model did not find a pancreas region in this scan.')
+    else:
+        st.info('File validation passed. Choose a model tab and run an available analysis. PDAC / Non-PDAC prediction is unavailable until trained models are connected.')
     array, spacing = reviewed['array'], reviewed['spacing']
     imaging_panels(reviewed, 'report')
     result_cards(reviewed)
@@ -181,12 +294,14 @@ def uploaded_report():
         st.subheader('Review notes')
         notes = st.text_area('Notes for this report', key='uploaded_report_notes', max_chars=10000, height=200,
                              placeholder='Add your observations…')
-        st.caption('Save notes to keep them with this scan’s history. PDF generation also saves the current notes.')
+        notes_status = st.empty()
         if st.button('Save review notes', disabled=not reviewed.get('upload_id'), width='stretch'):
             request('PUT', f'/uploads/{reviewed["upload_id"]}/notes', json={'notes':notes})
-            st.success('Notes saved to your scan history.')
-        st.write('**Diagnosis:** Awaiting model analysis')
-        st.write('**Segmentation / Grad-CAM:** Not available')
+            st.session_state['saved_report_notes'] = notes
+        st.write('**Diagnosis:** Not available')
+        st.write('**Pancreas segmentation:** ' + ('Complete' if reviewed.get('pancreas_mask') is not None else 'Not run'))
+        st.write('**Lesion segmentation:** ' + ('Complete' if reviewed.get('lesion_mask') is not None else 'Not run'))
+        st.write('**Grad-CAM:** Not available')
         pdf_key = (reviewed['digest'], notes, reviewed.get('display_mode', 'auto'))
         if st.button('Prepare PDF', type='primary', width='stretch'):
             with st.spinner('Preparing report…'):
@@ -196,6 +311,13 @@ def uploaded_report():
                 pdf = request('POST', '/uploads/report.pdf',
                               files={'file': (reviewed['name'], reviewed['content'])}, data=report_data).content
                 st.session_state['uploaded_report_pdf'] = (pdf_key, pdf)
+                st.session_state['saved_report_notes'] = notes
+        if notes != st.session_state.get('saved_report_notes', ''):
+            notes_status.warning('Unsaved changes. Save notes or prepare the PDF to keep them with this scan.')
+        elif notes:
+            notes_status.caption('✓ Notes saved to this scan’s history.')
+        else:
+            notes_status.caption('No review notes added yet.')
         prepared = st.session_state.get('uploaded_report_pdf')
         if prepared and prepared[0] == pdf_key:
             st.download_button('Download report · PDF', prepared[1], 'panvision-ct-report.pdf', 'application/pdf', width='stretch')
@@ -277,7 +399,7 @@ def scan_history(admin=False):
 
 def administration():
     heading('Administration', 'Manage doctor access and monitor application tables.')
-    st.caption('This manages PanVision application data. PostgreSQL server administration stays in Azure.')
+    st.caption('This manages PanVision application data. PostgreSQL server administration stays with your database provider.')
     notice = st.session_state.pop('admin_notice', None)
     if notice:
         st.success(notice)

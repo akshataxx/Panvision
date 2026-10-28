@@ -3,8 +3,9 @@
 PanVision is a research workspace for reviewing pancreatic CT scans. It combines
 a green-and-cream Streamlit dashboard, a FastAPI backend, and PostgreSQL account,
 upload-history and audit tables. It is an academic prototype, not a clinical
-system. Trained classification, segmentation, Grad-CAM and retrieval models are
-not connected; the interface does not invent diagnoses or model results.
+system. P3 pancreas segmentation can run when its model files and optional
+inference dependencies are installed. Lesion segmentation, classification,
+Grad-CAM and retrieval are not connected; the interface does not invent their results.
 
 ## Folder structure
 
@@ -62,9 +63,9 @@ The upload-first workflow needs no OneDrive dataset directory.
 
 | Screen | Behavior |
 | --- | --- |
-| Home | Scan metadata strip, four imaging panels, prediction/measurement/reference cards, findings and actions; empty until upload |
+| Home | Scan metadata strip, CT preview, model-output tabs, prediction/measurement/reference cards, findings and actions |
 | Upload CT | NIfTI/MHA uploader, validation and automatic navigation to the report |
-| Case Report | Uploaded CT, slice/display controls, geometry, saved notes and PDF generation/download |
+| Case Report | Uploaded CT, P3 pancreas and L2 lesion mask overlays, slice/display controls, geometry, saved notes and PDF generation/download |
 | Past Cases | Signed-in doctor's persistent own-upload history, validation status and event timeline |
 | Similar Cases | Explicit unavailable state until trained retrieval is connected |
 | My Profile | Own name/email/role plus current-password-verified password changes for both roles |
@@ -91,28 +92,25 @@ On Windows use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 Use the explicit virtual-environment interpreter to avoid accidentally running
 Streamlit through Conda or a global Python installation.
 
-### 1. Configure PostgreSQL privately
+### 1. Configure Neon privately
 
-Create a PostgreSQL server/database and allow your client IP through its firewall.
-For Azure, confirm the server is Ready and PostgreSQL password authentication is
-enabled. The app does not create an Azure server or database.
+In your Neon project, choose the correct branch and database, click **Connect**,
+and copy its PostgreSQL connection string. Copy `.env.example` to `.env` in the
+repository root, then replace the placeholder URL with the complete Neon URL:
 
-Set `PANVISION_DATABASE_URL` in the backend terminal to the provider's private
-connection URL, in this form (replace placeholders; do not commit real values):
-
-```text
-postgresql://DB_USER:URL_ENCODED_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require
+```bash
+cp .env.example .env
 ```
 
-Preserve your provider's TLS settings; use certificate/hostname verification for
-deployment as supported by its trust configuration. Encode special characters
-in credentials. `.env` and `.streamlit/secrets.toml` are ignored by Git, but the
-app does not automatically load a `.env` file. Configure environment variables
-through your terminal or hosting secret manager. Never print or share the URL.
+The backend loads the root `.env` automatically. An environment variable already
+set in the backend process takes precedence over the file. Keep Neon's TLS query
+parameters; do not print, share or commit the URL. `.env` is ignored by Git.
+GitHub repository secrets are available only to workflows or deployments that
+explicitly pass them to the process; they do not configure a local run.
 
 ### 2. Initialize tables and create the first administrator
 
-In the terminal with `PANVISION_DATABASE_URL` set:
+From the repository root, after configuring `.env`:
 
 ```bash
 .venv/bin/python -m app.database check
@@ -120,9 +118,14 @@ In the terminal with `PANVISION_DATABASE_URL` set:
 .venv/bin/python -m app.database create-admin
 ```
 
+Run `init` only after checking that this is the intended Neon database. It is
+additive/idempotent. If your existing accounts were migrated from Azure, skip
+`create-admin` and sign in with an existing administrator account. Changing the
+connection URL alone does not copy Azure data.
+
 Administrator email/name/password are prompted; passwords are hidden. Use a new
 email if a doctor account already uses the address. There are no default
-credentials. The app administrator is distinct from the PostgreSQL/Azure
+credentials. The app administrator is distinct from the PostgreSQL provider
 administrator. Existing doctors keep their password hashes and default to doctor
 access. `init` is additive/idempotent: it creates missing application tables and
 columns without dropping existing data. It requires schema creation privileges;
@@ -151,6 +154,42 @@ Open <http://127.0.0.1:8501>. The API URL defaults to port 8000 if not configure
 so set it explicitly when using 8001. Sign in as the administrator and add doctors
 through Administration → Add doctor. A private `create-doctor` maintenance CLI
 also exists for operators with database credentials; it is not public registration.
+
+### Optional: run P3 pancreas and L2 lesion segmentation
+
+Install the inference dependencies in the same virtual environment:
+
+```bash
+.venv/bin/python -m pip install -r app/inference-requirements.txt
+```
+
+Copy the **full** P3 nnU-Net trainer folder into the Git-ignored location below.
+It needs `plans.json`, `dataset.json`, and `fold_0/checkpoint_best.pth`:
+
+```text
+data/private/models/P3_nnunet_2d_full/nnUNetTrainer_PanVision__nnUNetPlans__2d/
+```
+
+Alternatively, set `PANVISION_PANCREAS_MODEL_DIR` in the root `.env` to the
+absolute path of that trainer folder. Restart FastAPI after changing model files
+or configuration. Put the completed L2 checkpoint at
+`data/private/models/L2_attention_unet_roi_full/best.pt`, or set
+`PANVISION_LESION_CHECKPOINT` in the root `.env` to its absolute path. The checkpoint
+must be the completed `L2_attention_unet_roi_full` `best.pt` (step 4000, `max_train=0`).
+No batch predictions or retraining are needed for an uploaded scan. After validation,
+open **Lesion** and click **Run lesion segmentation**. The backend runs P3 to find the
+pancreas, then uses that mask to define L2's ROI and returns both masks in the
+uploaded CT grid. The **Pancreas** tab can also run P3 alone. The backend
+uses the training preprocessing (LPS, 1.5 × 1.5 × 3 mm, −100 to 300 HU), runs fold 0's
+best checkpoint, and aligns both predicted masks with the uploaded CT. Green is
+pancreas; coral is lesion. The lesion volume card measures the predicted mask,
+not a PDAC classification. L2's training-time reference-ROI Dice of 0.3864 is
+not an end-to-end P3→L2 score; that evaluation remains to be reported separately.
+Local inference accepts scans up to 32 million voxels and may take several minutes
+on a CPU. The masks live
+only in the current Streamlit session; the PDF still
+contains the CT preview and notes, without the mask. Persistent results belong
+to the later case-storage work.
 
 ## PostgreSQL tables
 
@@ -191,7 +230,7 @@ to an upload ID requires matching ownership and file digest.
 
 CT data, masks and model weights belong in separately configured private file
 storage, not Git or PostgreSQL. Upload metadata/notes are persistent; CT files
-remain temporary. Trained inference and persistent scan/PDF storage are future
+remain temporary. Classification inference and persistent scan/PDF storage are future
 integration work. Deployments still need HTTPS, trusted PostgreSQL TLS,
 proxy upload-size limits, login/upload rate limiting, backups, retention controls
 and appropriate authorization before handling identifiable patient data.
@@ -205,6 +244,8 @@ and appropriate authorization before handling identifiable patient data.
 | `GET /auth/me`, `GET /auth/session` | Own profile; non-renewing session check |
 | `POST /auth/password` | Change own password and revoke sessions |
 | `POST /uploads/validate` | Validate multipart CT and return its recorded upload ID |
+| `POST /uploads/{id}/pancreas` | Run P3 pancreas segmentation for a doctor's byte-matching validated upload |
+| `POST /uploads/{id}/lesion` | Run P3 then L2 and return both masks for a doctor's byte-matching validated upload |
 | `POST /uploads/report.pdf` | Generate PDF from CT, notes, display mode and optional recorded upload ID |
 | `GET /me/uploads` | Own paginated upload history |
 | `GET /uploads/{id}`, `PUT /uploads/{id}/notes` | Authorized detail and owner-only notes |

@@ -1,8 +1,10 @@
 import io
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from uuid import UUID
 
 import numpy as np
 import psycopg
@@ -80,6 +82,77 @@ class BackendTests(unittest.TestCase):
                 self.assertEqual(response.status_code,200)
                 self.assertTrue(response.content.startswith(b'%PDF'))
                 self.assertEqual(response.headers['content-type'],'application/pdf')
+
+    def test_pancreas_mask_requires_owned_matching_upload(self):
+        uid = '11111111-1111-4111-8111-111111111111'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'scan.nii.gz'
+            sitk.WriteImage(sitk.GetImageFromArray(np.ones((4,8,8), dtype=np.float32)), str(path))
+            content = path.read_bytes()
+            record = {'status':'validated', 'sha256':hashlib.sha256(content).hexdigest()}
+            mask = np.zeros((4,8,8), dtype=bool)
+            mask[:,2:5,3:6] = True
+            self.assertEqual(self.client.post(f'/uploads/{uid}/pancreas',
+                                              files={'file':('scan.nii.gz', content)}).status_code, 401)
+            with patch('app.api.db.get_upload', return_value=record) as get_upload, \
+                 patch('app.api.segment_pancreas', return_value=mask) as segment:
+                response = self.client.post(f'/uploads/{uid}/pancreas', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 200, response.text[:200])
+                with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
+                    np.testing.assert_array_equal(result['mask'], mask)
+                get_upload.assert_called_once_with(UUID(uid), 1)
+                segment.assert_called_once()
+            with patch('app.api.db.get_upload', side_effect=LookupError), \
+                 patch('app.api.segment_pancreas') as segment:
+                response = self.client.post(f'/uploads/{uid}/pancreas', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 404)
+                segment.assert_not_called()
+            with patch('app.api.db.get_upload', return_value={'status':'validated','sha256':'wrong'}), \
+                 patch('app.api.segment_pancreas') as segment:
+                response = self.client.post(f'/uploads/{uid}/pancreas', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 409)
+                segment.assert_not_called()
+            from app.pancreas import ModelUnavailable
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.segment_pancreas', side_effect=ModelUnavailable('secret-path')):
+                response = self.client.post(f'/uploads/{uid}/pancreas', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 503)
+                self.assertNotIn('secret-path', response.text)
+
+    def test_lesion_route_runs_p3_then_l2_for_owned_upload(self):
+        uid = '11111111-1111-4111-8111-111111111111'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'scan.nii.gz'
+            sitk.WriteImage(sitk.GetImageFromArray(np.ones((4,8,8), dtype=np.float32)), str(path))
+            content = path.read_bytes()
+            record = {'status':'validated', 'sha256':hashlib.sha256(content).hexdigest()}
+            pancreas = np.ones((4,8,8), dtype=bool)
+            lesion = np.zeros((4,8,8), dtype=bool)
+            lesion[1,2:4,3:5] = True
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.model_available', return_value=True), \
+                 patch('app.api.lesion_model_available', return_value=True), \
+                 patch('app.api.segment_pancreas', return_value=pancreas) as p3, \
+                 patch('app.api.segment_lesion', return_value=lesion) as l2:
+                response = self.client.post(f'/uploads/{uid}/lesion', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 200, response.text[:200])
+                with np.load(io.BytesIO(response.content), allow_pickle=False) as result:
+                    np.testing.assert_array_equal(result['pancreas'], pancreas)
+                    np.testing.assert_array_equal(result['lesion'], lesion)
+                p3.assert_called_once()
+                l2.assert_called_once()
+                np.testing.assert_array_equal(l2.call_args.args[2], pancreas)
+            with patch('app.api.db.get_upload', return_value={**record, 'sha256':'wrong'}), \
+                 patch('app.api.segment_pancreas') as p3:
+                response = self.client.post(f'/uploads/{uid}/lesion', headers=self.headers,
+                                            files={'file':('scan.nii.gz', content)})
+                self.assertEqual(response.status_code, 409)
+                p3.assert_not_called()
 
 
     def test_admin_authorization_and_doctor_creation(self):

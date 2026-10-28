@@ -13,7 +13,7 @@ class SessionExpired(APIError):
     pass
 
 
-def request(method, path, *, authenticated=True, **kwargs):
+def request(method, path, *, authenticated=True, timeout=60, **kwargs):
     base = os.environ.get('PANVISION_API_URL', 'http://127.0.0.1:8000').rstrip('/')
     parsed = urlsplit(base)
     if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
@@ -25,12 +25,16 @@ def request(method, path, *, authenticated=True, **kwargs):
         raise SessionExpired('Sign in again.')
     try:
         response = httpx.request(method, base + path, headers={'Authorization': f'Bearer {token}'} if token else {},
-                                 timeout=60, follow_redirects=False, **kwargs)
+                                 timeout=timeout, follow_redirects=False, **kwargs)
     except httpx.HTTPError:
         raise APIError('Cannot reach the backend. Check that the FastAPI server is running.') from None
     if response.status_code == 401 and authenticated:
         raise SessionExpired('Your session expired. Sign in again.')
     if response.is_error or response.is_redirect:
+        if response.status_code == 413 and path.endswith(('/pancreas', '/lesion')):
+            raise APIError('This scan is too large for local segmentation.')
+        if response.status_code == 503 and path.endswith(('/pancreas', '/lesion')):
+            raise APIError('Segmentation is unavailable. Check the backend model files and try again.')
         if response.status_code == 422:
             raise APIError('Check the email, study ID, or notes. Notes must be at most 10,000 characters.')
         # Never forward raw proxy errors, tracebacks, or credential-bearing URLs.

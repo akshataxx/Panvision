@@ -108,3 +108,25 @@ def upload_rgb_slice(array, z, display_mode='auto'):
     if display_mode not in ('hu', 'normalized'):
         raise ValueError('Unknown display mode')
     return rgb_slice(array, None, z, hu=display_mode == 'hu')
+
+
+def upload_pancreas_slice(array, mask, z, display_mode='auto', opacity=0.45):
+    """Overlay a model pancreas mask on the same uploaded CT voxel grid."""
+    if mask.shape != array.shape:
+        raise ValueError('Pancreas mask does not align with the uploaded CT.')
+    rgb = upload_rgb_slice(array, z, display_mode)
+    region = mask[z].astype(bool)
+    rgb[region] = ((1 - opacity) * rgb[region] +
+                   opacity * np.array([75, 216, 135])).astype(np.uint8)
+    return rgb
+
+
+def upload_lesion_slice(array, mask, z, display_mode='auto', opacity=0.55):
+    """Overlay a predicted lesion mask in coral on the uploaded CT grid."""
+    if mask.shape != array.shape:
+        raise ValueError('Lesion mask does not align with the uploaded CT.')
+    rgb = upload_rgb_slice(array, z, display_mode)
+    region = mask[z].astype(bool)
+    rgb[region] = ((1 - opacity) * rgb[region] +
+                   opacity * np.array([250, 101, 113])).astype(np.uint8)
+    return rgb
