@@ -193,6 +193,11 @@ def classify_scan(array, spacing_xyz, pancreas_mask):
         array, spacing_xyz, prepared, slices, boxes, int(slices[hottest]), heatmap)
     result = aggregate_predictions(probabilities.cpu().numpy(), embeddings.cpu().numpy(),
                                    config['threshold'])
-    result.update({'gradcam': projected, 'gradcam_slice': source_slice, **config})
+    result.update({'gradcam': projected, 'gradcam_slice': source_slice,
+                   # The same 224 x 224 crop the model saw, its heat map, and that slice's own chance of PDAC
+                   # (shown as: crop | heat map | overlay).
+                   'gradcam_crop': np.asarray(crops[hottest], dtype=np.uint8),
+                   'gradcam_crop_heat': np.asarray(heatmap, dtype=np.float32),
+                   'gradcam_probability': float(probabilities[hottest].item()), **config})
     return result
 

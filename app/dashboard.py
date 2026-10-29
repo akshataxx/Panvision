@@ -11,7 +11,7 @@ import streamlit as st
 
 from app.api_client import request, sign_out, APIError, SessionExpired
 from app.auth import require_doctor, idle_watchdog
-from app.data import (upload_display_mode, upload_gradcam_slice, upload_lesion_slice,
+from app.data import (gradcam_panels, upload_display_mode, upload_gradcam_slice, upload_lesion_slice,
                       upload_pancreas_slice, upload_rgb_slice)
 from app.validation import read_ct
 
@@ -72,7 +72,18 @@ def run_full_analysis(reviewed):
             if len(neighbors) > 3 or any(row['label'] not in (0, 1) or
                                          not -1 <= row['similarity'] <= 1 for row in neighbors):
                 raise ValueError('Similar-case results are invalid.')
+            attention = {}
+            if 'gradcam_crop' in result.files:  # newer backends also send the crop view
+                crop = np.asarray(result['gradcam_crop'], dtype=np.uint8)
+                crop_heat = np.asarray(result['gradcam_crop_heat'], dtype=np.float32)
+                slice_probability = float(result['gradcam_probability'])
+                if (crop.shape != (224, 224) or crop_heat.shape != (224, 224) or
+                        not np.isfinite(crop_heat).all() or not 0 <= slice_probability <= 1):
+                    raise ValueError('Grad-CAM crop does not match the classifier input.')
+                attention = {'gradcam_crop': crop, 'gradcam_crop_heat': crop_heat,
+                             'gradcam_probability': slice_probability}
             reviewed.update({
+                **attention,
                 'pancreas_mask': pancreas,
                 'lesion_mask': lesion,
                 'gradcam': gradcam,
@@ -155,10 +166,25 @@ def imaging_panels(reviewed, key):
         st.markdown('##### Model attention · Grad-CAM')
         if reviewed.get('gradcam') is not None:
             attention_slice = int(reviewed['gradcam_slice'])
-            st.image(upload_gradcam_slice(array, reviewed['gradcam'], attention_slice, resolved),
-                     width='stretch')
-            st.caption(f'Slice {attention_slice + 1} / {len(array)}. Grad-CAM is computed on the DenseNet pancreas crop '
-                       'and mapped back to the uploaded CT for context. Warmer color means greater model attention.')
+            if reviewed.get('gradcam_crop') is not None:
+                # Crop | heat map | overlay, the same three pictures as in the experiment notebooks.
+                pictures = gradcam_panels(reviewed['gradcam_crop'], reviewed['gradcam_crop_heat'])
+                for column, title, picture in zip(st.columns(3, gap='small'),
+                                                  ['Pancreas crop', 'Grad-CAM heat map', 'Overlay'], pictures):
+                    with column:
+                        st.markdown(f'**{title}**')
+                        st.image(picture, width='stretch')
+                st.caption(f'Most suspicious slice ({attention_slice + 1} / {len(array)}): chance of PDAC '
+                           f'{reviewed["gradcam_probability"]:.2f}. 144 mm window around the predicted pancreas. '
+                           'Blue = low model attention, red = high. Coarse by design; not a lesion segmentation.')
+                with st.expander('Show on the full CT slice'):
+                    st.image(upload_gradcam_slice(array, reviewed['gradcam'], attention_slice, resolved),
+                             width='stretch')
+            else:
+                st.image(upload_gradcam_slice(array, reviewed['gradcam'], attention_slice, resolved),
+                         width='stretch')
+                st.caption(f'Slice {attention_slice + 1} / {len(array)}. Grad-CAM is computed on the DenseNet pancreas crop '
+                           'and mapped back to the uploaded CT for context. Warmer color means greater model attention.')
         else:
             placeholder('Analysis unavailable', 'Grad-CAM was not returned by the classifier.')
     st.caption('All overlays are research model outputs and are not a diagnosis.')

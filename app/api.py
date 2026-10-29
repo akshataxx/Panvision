@@ -243,9 +243,15 @@ async def analyze_upload_route(upload_id: UUID, doctor: Annotated[dict, Depends(
     except LookupError:
         raise HTTPException(409, 'Uploaded file no longer matches the selected history record.')
     neighbors = result['neighbors']
+    crop_view = {}
+    if 'gradcam_crop' in result:  # crop | heat map | overlay view of Grad-CAM
+        crop_view = {'gradcam_crop': np.asarray(result['gradcam_crop'], dtype=np.uint8),
+                     'gradcam_crop_heat': np.asarray(result['gradcam_crop_heat'], dtype=np.float32),
+                     'gradcam_probability': np.asarray(result['gradcam_probability'], dtype=np.float32)}
     output = io.BytesIO()
     np.savez_compressed(
         output,
+        **crop_view,
         pancreas=result['pancreas_mask'].astype(np.uint8),
         lesion=result['lesion_mask'].astype(np.uint8),
         gradcam=np.asarray(result['gradcam'], dtype=np.float32),
