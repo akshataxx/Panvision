@@ -62,7 +62,7 @@ All figures use the shared patient-level split. See the final report for methods
 
 ## Run it
 
-**Live demo:** `<add the deployed address here>`. It runs on a small Google Cloud VM, so segmentation and classification take a few minutes per scan.
+**Live demo:** https://34-177-82-16.sslip.io/. It runs on a small Google Cloud VM, so segmentation and classification take a few minutes per scan.
 
 **Locally** (Python 3.12, Windows):
 
