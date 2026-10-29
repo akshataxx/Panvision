@@ -4,20 +4,11 @@ import base64
 import html
 import io
 
+import numpy as np
 from PIL import Image
 
 from app.data import (annotation_volume, initial_slice, rgb_slice, upload_rgb_slice,
-                      upload_pancreas_slice, upload_display_mode)
-
-CLASSIFIER_CAVEAT = ('Research model (DenseNet-121 on predicted-pancreas crops) · Validation only, 334 patients: '
-                     'AUC 0.91, sensitivity 84%, specificity 85%. Not yet evaluated on the held-out test set. '
-                     'Not a diagnosis.')
-
-
-def classification_text(classification):
-    probability, threshold = classification['probability'], classification['threshold']
-    label = 'PDAC suspected' if probability >= threshold else 'Non-PDAC'
-    return f'{label} (model probability {probability:.2f}; decision threshold {threshold:.2f})'
+                      upload_gradcam_slice, upload_pancreas_slice, upload_display_mode)
 
 
 def build_report(case, array, labels, spacing, notes=''):
@@ -58,7 +49,8 @@ confidence, segmentation predictions, Grad-CAM, and similar-case retrieval are u
 
 
 def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancreas_mask=None,
-              classification=None):
+              predicted_class=None, pdac_probability=None, threshold=None,
+              gradcam=None, gradcam_slice=None, similar_cases=None):
     """Return a portable PDF using real case evidence and no external services."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
@@ -69,6 +61,16 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
     uploaded = case.get('source') == 'upload'
     if pancreas_mask is not None and (not uploaded or pancreas_mask.shape != array.shape):
         raise ValueError('Pancreas mask does not match the uploaded scan.')
+    if gradcam is not None:
+        if not uploaded or gradcam.shape != array.shape[1:] or not np.isfinite(gradcam).all():
+            raise ValueError('Grad-CAM does not match the uploaded scan.')
+        if gradcam_slice is None or not 0 <= int(gradcam_slice) < len(array):
+            raise ValueError('Grad-CAM slice is outside the uploaded scan.')
+    if pdac_probability is not None and not 0 <= float(pdac_probability) <= 1:
+        raise ValueError('PDAC probability must be between zero and one.')
+    if threshold is not None and not 0 < float(threshold) < 1:
+        raise ValueError('Classification threshold must be between zero and one.')
+    similar_cases = list(similar_cases or [])[:3]
     pancreas_region = pancreas_mask is not None and bool(pancreas_mask.any())
     output = io.BytesIO()
     styles = getSampleStyleSheet()
@@ -91,15 +93,20 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 8)]))
         story.append(result)
     section('1. Study information')
-    table([('Study ID', case['study_id']), ('Source', 'Uploaded scan' if uploaded else 'PANORAMA dataset')]
+    table([('Study ID', case['study_id'])] + ([('Patient number', case.get('patient_id', 'Not provided'))] if uploaded else [])
+          + [('Source', 'Uploaded scan' if uploaded else 'PANORAMA dataset')]
           + ([] if uploaded else [('Patient ID', case.get('patient_id', 'Unavailable')),
            ('Patient split', case.get('split', 'Unavailable')),
            ('Annotation tier', case.get('annotation_tier', 'Unavailable'))]))
     section('2. Diagnosis and measurements')
     value = annotation_volume(labels, spacing)
     rows = [('Diagnosis' if uploaded else 'Dataset diagnosis', case.get('diagnosis', 'Unavailable')),
-            ('Model prediction', classification_text(classification) if uploaded and classification
-             else 'Not run' if uploaded else 'Not available - trained model not connected')]
+            ('Model prediction', predicted_class or 'Not available')]
+    if uploaded:
+        rows.extend([
+            ('PDAC probability', f'{float(pdac_probability):.1%}' if pdac_probability is not None else 'Not available'),
+            ('Decision threshold', f'{float(threshold):.1%}' if threshold is not None else 'Not available'),
+        ])
     if uploaded:
         rows.append(('Pancreas segmentation', 'Model overlay included' if pancreas_region else
                      'No region marked by model' if pancreas_mask is not None else 'Not run'))
@@ -107,15 +114,10 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
         rows.append(('Annotated lesion volume', f'{value:.2f} cm3' if value is not None else 'Unavailable'))
     rows.append(('Voxel spacing (XYZ)', ' x '.join(f'{v:.2f}' for v in spacing) + ' mm'))
     table(rows)
-    evidence = ('Uploaded volume passed structural validation. This PDF includes the CT preview and review notes; '
-                'the pancreas overlay is a model estimate when present. Lesion segmentation is not included.' if uploaded
+    evidence = ('Uploaded volume passed structural validation. The pancreas overlay and Grad-CAM are model estimates. '
+                'Grad-CAM shows classifier attention and is not a lesion segmentation.' if uploaded
                 else 'Diagnosis is the PANORAMA source label. Volume comes from supplied annotations.')
-    unavailable = (' Diameter, location, Grad-CAM and similar-case retrieval are unavailable.'
-                   if uploaded and classification else ' Model probability, confidence, diameter, location, Grad-CAM '
-                   'and similar-case retrieval are unavailable.')
-    story.extend([Spacer(1, 8), paragraph(evidence + unavailable, 'SmallNote')])
-    if uploaded and classification:
-        story.append(paragraph(CLASSIFIER_CAVEAT, 'SmallNote'))
+    story.extend([Spacer(1, 8), paragraph(evidence, 'SmallNote')])
     section('3. Visual results')
     z = (int(pancreas_mask.sum(axis=(1, 2)).argmax()) if uploaded and pancreas_region
          else initial_slice(array, labels))
@@ -142,7 +144,40 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
               else f'Uploaded CT shown with {display_label}. No pancreas model output included.' if uploaded
               else 'Green: pancreas. Coral: lesion. Dataset annotations, not predicted segmentations.')
     story.append(paragraph(f'Slice {z+1} of {len(array)}. ' + legend, 'SmallNote'))
-    section('4. Review notes')
+    next_section = 4
+    if uploaded and gradcam is not None:
+        section(f'{next_section}. Model attention')
+        next_section += 1
+        buffer = io.BytesIO()
+        pixels = upload_gradcam_slice(array, gradcam, int(gradcam_slice), display_mode)
+        Image.fromarray(pixels).save(buffer, format='PNG')
+        buffer.seek(0)
+        attention = PDFImage(buffer)
+        ratio = 300 / max(attention.imageWidth, attention.imageHeight)
+        attention.drawWidth, attention.drawHeight = attention.imageWidth * ratio, attention.imageHeight * ratio
+        attention.hAlign = 'CENTER'
+        story.extend([attention, paragraph(
+            f'Grad-CAM on slice {int(gradcam_slice)+1} of {len(array)}. The heatmap was computed on the '
+            'DenseNet pancreas crop and mapped back to the original CT for anatomical context.', 'SmallNote')])
+    section(f'{next_section}. Similar reference cases' if uploaded else f'{next_section}. Review notes')
+    if uploaded:
+        if similar_cases:
+            rows = [['Patient ID', 'Dataset label', 'Cosine similarity']] + [[
+                str(item['patient_id']), 'PDAC' if int(item['label']) == 1 else 'Non-PDAC',
+                f'{float(item["similarity"]):.4f}'] for item in similar_cases]
+            result = Table([[paragraph(value) for value in row] for row in rows],
+                           colWidths=[180, 165, 170], hAlign='LEFT')
+            result.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e5e8d5')),
+                                        ('GRID', (0, 0), (-1, -1), .5, colors.HexColor('#d4d9c0')),
+                                        ('TOPPADDING', (0, 0), (-1, -1), 7),
+                                        ('BOTTOMPADDING', (0, 0), (-1, -1), 7)]))
+            story.append(result)
+        else:
+            story.append(paragraph('No similar cases were returned.'))
+        story.append(paragraph('Reference cases are cosine-nearest training embeddings and are not diagnostic evidence.',
+                               'SmallNote'))
+        next_section += 1
+        section(f'{next_section}. Review notes')
     story.append(paragraph(notes or 'No review notes recorded.'))
     def footer(canvas, doc):
         canvas.setFont('Helvetica', 8)
@@ -152,3 +187,4 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
     SimpleDocTemplate(output, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=32, bottomMargin=42,
                       title=f"PanVision - {case['study_id']}").build(story, onFirstPage=footer, onLaterPages=footer)
     return output.getvalue()
+
