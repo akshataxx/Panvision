@@ -33,14 +33,14 @@ All figures use the shared patient-level split. See the final report for methods
 |---|---|---|
 | Pancreas segmentation (nnU-Net v2, 2D) | Validation Dice 0.819 (80 cases; U-Net baselines 0.764 and 0.783) | Reference masks are mostly automatic, so this is agreement with an automatic reference |
 | PDAC classifier, ResNet-50 | Test AUC 0.882 (95% CI 0.840–0.920); sensitivity 0.84, specificity 0.81 | Crops chosen with reference lesion masks, so absolute values are optimistic |
-| PDAC classifier, DenseNet-121 | Validation AUC 0.933 on the same crops; **0.91 on predicted-pancreas crops** (sensitivity 84%, specificity 85%) | Selected on validation; **not yet scored on the test set** |
+| PDAC classifier, DenseNet-121 | Validation AUC 0.933 on the same crops; **0.91 on predicted-pancreas crops** (sensitivity 84%, specificity 85%); **test AUC 0.891** (sensitivity 0.84, specificity 0.83) | Selected on validation, then scored once on the test set; deployed in the app |
 | Similar-case retrieval (DenseNet) | Precision@3 0.86 on validation queries (chance 0.58) | Offline evaluation, `src/explainability/` |
 | Lesion segmentation | Weak | High false-positive rate; not a detector |
 
 ## Limitations
 
 - The classifier was developed on crops that used reference lesion masks to pick slices, so absolute numbers are optimistic. Deployment uses predicted-pancreas crops, which do not use any lesion information.
-- The test set is small, so the confidence intervals are wide. DenseNet was selected on validation and is not scored on test.
+- The test set is small, so the confidence intervals are wide. DenseNet was selected on validation and scored once on the test set (AUC 0.891).
 - The lesion model is weak. Grad-CAM is coarse and shows classifier attention, not lesion extent.
 - No check for scanner or site effects was done. One dataset only (PANORAMA).
 
@@ -101,10 +101,9 @@ The data come from the public PANORAMA challenge dataset; see the report for the
 
 | Member | Main areas |
 |---|---|
-| Miti | |
-| Akshata | Pancreas and lesion segmentation cascade (U-Net, nnU-Net P3), lesion optimisation (threshold/size tuning, augmentation experiments, L2/L5 ensemble),integrating segmentation and lesion inference into the upload workflow, integrating the DenseNet-121 PDAC classifier into the API, dashboard and report, pancreas segmentation overlay in the PDF report,
-review notes in the case report, dashboard UI improvements (CT preview layout, analysis status, lesion overlay notes), Docker deployment to GCP Compute Engine with GitHub Actions CI/CD, Documentation |
-| Hrihaan | Repository setup, ResNet-50 classifier, explainability (Grad-CAM, similar-case evaluation), Documentation 
+| Miti | Data preparation and preprocessing, original dashboard, authentication and API, custom CNN and DenseNet-121 experiments, Neon-backed KNN retrieval, end-to-end inference and reporting pipeline |
+| Akshata | Pancreas and lesion segmentation cascade (U-Net, nnU-Net P3), lesion optimisation (threshold and size tuning, augmentation experiments, L2/L5 ensemble), integrating segmentation, lesion inference and the DenseNet-121 classifier into the upload workflow, API, dashboard and report, review notes, dashboard UI improvements, Docker deployment to GCP Compute Engine with GitHub Actions CI/CD, documentation |
+| Hrihaan | Repository setup, ResNet-50 classifier, explainability (Grad-CAM, similar-case evaluation), documentation |
 
 Working rules: Never commit CT data, model weights, `.env` files or connection strings.
 
