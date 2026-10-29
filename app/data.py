@@ -170,10 +170,7 @@ def upload_gradcam_slice(array, heatmap, z, display_mode='auto', opacity=0.7):
     if heatmap.shape != array.shape[1:] or not np.isfinite(heatmap).all():
         raise ValueError('Grad-CAM does not align with the uploaded CT slice.')
     rgb = upload_rgb_slice(array, z, display_mode).astype(np.float32)
-    strength = np.clip(heatmap, 0, 1)[..., None]
-    color = np.empty_like(rgb)
-    color[..., 0] = 255
-    color[..., 1] = 210 * (1 - strength[..., 0])
-    color[..., 2] = 32 * (1 - strength[..., 0])
-    alpha = opacity * strength
+    strength = np.clip(heatmap, 0, 1)
+    color = _jet(strength) * 255                 # multicoloured: blue (weak) -> red (strong)
+    alpha = (opacity * strength)[..., None]      # weak attention stays see-through
     return np.clip((1 - alpha) * rgb + alpha * color, 0, 255).astype(np.uint8)
