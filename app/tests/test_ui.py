@@ -28,7 +28,7 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertTrue(any('No scan uploaded yet' in m.value for m in app.markdown))
             next(b for b in app.button if b.label == 'Upload CT scan').click().run()
             self.assertEqual(app.sidebar.radio[0].value, 'Upload CT')
-            self.assertTrue(next(b for b in app.button if b.label == 'Validate and open report').disabled)
+            self.assertFalse(any(b.label == 'Validate and open report' for b in app.button))
             index.assert_not_called()
 
     def test_uploaded_report_preview_and_pdf(self):
@@ -39,7 +39,7 @@ class WorkspaceUITests(unittest.TestCase):
                                                    'array':np.ones((4,8,8)), 'spacing':(1,1,2)}
             app.sidebar.radio[0].set_value('Case Report').run()
             self.assertFalse(app.exception)
-            self.assertEqual([tab.label for tab in app.tabs], ['Pancreas', 'Lesion', 'Grad-CAM'])
+            self.assertEqual(list(app.tabs), [])
             self.assertTrue(any('File validation</span><strong>Passed' in item.value and
                                 'Model analysis</span><strong>Not run' in item.value
                                 for item in app.markdown))
@@ -48,9 +48,9 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertEqual(app.session_state['uploaded_report_pdf'][1], b'%PDF-test')
             self.assertEqual(api.call_args.args[:2], ('POST','/uploads/report.pdf'))
             self.assertEqual(api.call_args.kwargs['data']['notes'], 'Review this uploaded scan')
-            self.assertTrue(any('prediction is unavailable' in info.value for info in app.info))
+            self.assertTrue(any('Start analysis when you are ready' in info.value for info in app.info))
 
-    def test_pdf_sends_pancreas_mask_but_not_lesion_mask(self):
+    def test_pdf_sends_pancreas_but_excludes_lesion_mask(self):
         pancreas = np.zeros((4, 8, 8), dtype=bool)
         pancreas[1, 2:5, 3:6] = True
         lesion = np.ones((4, 8, 8), dtype=bool)
@@ -94,26 +94,6 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertFalse(any('Unsaved changes' in item.value for item in app.warning))
             self.assertTrue(any('Notes saved' in item.value for item in app.caption))
 
-    def test_pancreas_segmentation_appears_in_report(self):
-        mask = np.zeros((4,8,8), dtype=np.uint8)
-        mask[:,2:5,3:6] = 1
-        output = io.BytesIO()
-        np.savez_compressed(output, mask=mask)
-        with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
-             patch('app.dashboard.request', return_value=SimpleNamespace(content=output.getvalue())) as api:
-            app = AppTest.from_file(APP).run()
-            app.session_state['upload_review'] = {
-                'digest':'digest', 'name':'scan.nii.gz', 'content':b'ct',
-                'array':np.ones((4,8,8)), 'spacing':(1,1,2), 'upload_id':'upload-1',
-            }
-            app.sidebar.radio[0].set_value('Case Report').run()
-            next(button for button in app.button if button.label == 'Run pancreas segmentation').click().run()
-            self.assertFalse(app.exception, [error.message for error in app.exception])
-            api.assert_called_with('POST', '/uploads/upload-1/pancreas',
-                                   files={'file':('scan.nii.gz', b'ct')}, timeout=600)
-            np.testing.assert_array_equal(app.session_state['upload_review']['pancreas_mask'], mask)
-            self.assertTrue(any('Pancreas complete' in item.value for item in app.markdown))
-
     def test_successful_login_opens_home_without_form(self):
         doctor = {'id':1,'name':'ABC','email':'test@example.com'}
         def response(method, path, **kwargs):
@@ -128,11 +108,22 @@ class WorkspaceUITests(unittest.TestCase):
             self.assertEqual(app.sidebar.radio[0].value,'Home')
             self.assertFalse(any(b.label == 'Sign in' for b in app.button))
 
-    def test_validation_button_navigates_to_report(self):
+    def test_upload_validates_and_waits_for_explicit_analysis(self):
         uploaded = SimpleNamespace(name='scan.nii.gz', getvalue=lambda: b'ct-test')
+        output = io.BytesIO()
+        np.savez_compressed(
+            output, pancreas=np.ones((4, 8, 8), dtype=np.uint8),
+            lesion=np.ones((4, 8, 8), dtype=np.uint8),
+            gradcam=np.ones((8, 8), dtype=np.float32), gradcam_slice=np.asarray(2),
+            predicted_class=np.asarray('PDAC'), pdac_probability=np.asarray(0.82),
+            threshold=np.asarray(0.42), neighbor_ids=np.asarray(['101867']),
+            neighbor_labels=np.asarray([1]), neighbor_similarities=np.asarray([0.96]),
+        )
         def response(method, path, **kwargs):
             if path == '/uploads/validate':
                 return SimpleNamespace(json=lambda:{'valid':True, 'upload_id':'upload-1'})
+            if path == '/uploads/upload-1/analysis':
+                return SimpleNamespace(content=output.getvalue())
             raise AssertionError(path)
         with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
              patch('app.dashboard.request', side_effect=response) as api, \
@@ -140,15 +131,18 @@ class WorkspaceUITests(unittest.TestCase):
              patch('app.dashboard.read_ct', return_value=(np.ones((4,8,8)), (1,1,2))):
             app=AppTest.from_file(APP).run()
             app.sidebar.radio[0].set_value('Upload CT').run()
-            next(b for b in app.button if b.label == 'Validate and open report').click().run()
             self.assertFalse(app.exception, [e.message for e in app.exception])
             self.assertEqual(app.sidebar.radio[0].value, 'Case Report')
             self.assertEqual(app.session_state['upload_review']['name'], 'scan.nii.gz')
-            self.assertNotIn('pancreas_mask', app.session_state['upload_review'])
-            api.assert_called_once_with('POST', '/uploads/validate', files={'file':('scan.nii.gz', b'ct-test')})
-            self.assertTrue(any(b.label == 'Run pancreas segmentation' for b in app.button))
+            self.assertNotIn('predicted_class', app.session_state['upload_review'])
+            self.assertEqual(api.call_count, 1)
+            next(button for button in app.button if button.label == 'Run full AI analysis').click().run()
+            self.assertFalse(app.exception, [e.message for e in app.exception])
+            self.assertEqual(app.session_state['upload_review']['predicted_class'], 'PDAC')
+            self.assertTrue(app.session_state['upload_review']['lesion_mask'].all())
+            self.assertEqual(api.call_count, 2)
 
-    def test_model_tabs_show_only_available_run_action(self):
+    def test_report_has_one_explicit_analysis_button_and_no_model_tabs(self):
         with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
              patch('app.dashboard.request') as api:
             app=AppTest.from_file(APP).run()
@@ -158,34 +152,9 @@ class WorkspaceUITests(unittest.TestCase):
             }
             app.sidebar.radio[0].set_value('Case Report').run()
             self.assertFalse(app.exception, [e.message for e in app.exception])
-            self.assertFalse(next(b for b in app.button if b.label == 'Run pancreas segmentation').disabled)
-            self.assertFalse(next(b for b in app.button if b.label == 'Run lesion segmentation').disabled)
-            self.assertTrue(next(b for b in app.button if b.label == 'Run Grad-CAM').disabled)
+            self.assertEqual(list(app.tabs), [])
+            self.assertEqual(sum(button.label == 'Run full AI analysis' for button in app.button), 1)
             api.assert_not_called()
-
-    def test_lesion_segmentation_shows_mask_and_volume(self):
-        pancreas = np.ones((4,8,8), dtype=np.uint8)
-        lesion = np.zeros((4,8,8), dtype=np.uint8)
-        lesion[1,2:4,3:5] = 1
-        output = io.BytesIO()
-        np.savez_compressed(output, pancreas=pancreas, lesion=lesion)
-        with patch('app.dashboard.require_doctor', return_value={'id':1,'name':'ABC'}), \
-             patch('app.dashboard.request', return_value=SimpleNamespace(content=output.getvalue())) as api:
-            app = AppTest.from_file(APP).run()
-            app.session_state['upload_review'] = {
-                'digest':'digest', 'name':'scan.nii.gz', 'content':b'ct',
-                'array':np.ones((4,8,8)), 'spacing':(1,1,2), 'upload_id':'upload-1',
-            }
-            app.sidebar.radio[0].set_value('Case Report').run()
-            next(button for button in app.button if button.label == 'Run lesion segmentation').click().run()
-            self.assertFalse(app.exception, [error.message for error in app.exception])
-            api.assert_called_with('POST', '/uploads/upload-1/lesion',
-                                   files={'file':('scan.nii.gz', b'ct')}, timeout=900)
-            np.testing.assert_array_equal(app.session_state['upload_review']['lesion_mask'], lesion)
-            self.assertTrue(any('Coral: model-proposed lesion region' in item.value for item in app.caption))
-            self.assertTrue(any('false-positive masks on 152 of 234' in item.value for item in app.caption))
-            self.assertTrue(any('Model-marked region' in item.value for item in app.markdown))
-            self.assertTrue(any('Model mask volume' in item.value for item in app.markdown))
 
 
     def test_doctor_profile_has_no_admin_navigation(self):

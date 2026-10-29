@@ -20,7 +20,8 @@ class BackendTests(unittest.TestCase):
         self.session_patch = patch('app.api.db.session_doctor', side_effect=lambda t, **kwargs: self.doctor if t == 'valid' else None)
         self.session_patch.start()
         self.addCleanup(self.session_patch.stop)
-        for target, value in [('record_upload','11111111-1111-4111-8111-111111111111'),('record_report',None)]:
+        for target, value in [('record_upload','11111111-1111-4111-8111-111111111111'),
+                              ('record_report',None), ('record_analysis',None)]:
             mocked = patch('app.api.db.'+target, return_value=value)
             mocked.start()
             self.addCleanup(mocked.stop)
@@ -104,6 +105,31 @@ class BackendTests(unittest.TestCase):
                     files={'file': ('scan.nii.gz', content), 'pancreas_mask': ('pancreas.mask', b'x')},
                     data={'upload_id': uid}).status_code, 422)
 
+    def test_uploaded_report_includes_complete_model_results(self):
+        uid = '11111111-1111-4111-8111-111111111111'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'scan.nii.gz'
+            sitk.WriteImage(sitk.GetImageFromArray(np.ones((4, 8, 8), dtype=np.float32)), str(path))
+            content = path.read_bytes()
+            neighbors = [{'patient_id': '101867', 'label': 1, 'similarity': 0.96}]
+            record = {'sha256': hashlib.sha256(content).hexdigest(), 'status': 'validated',
+                      'analysis': {'predicted_class': 'PDAC', 'pdac_probability': 0.82,
+                                   'threshold': 0.42, 'neighbors': neighbors}}
+            heatmap = io.BytesIO()
+            np.save(heatmap, np.ones((8, 8), dtype=np.float32), allow_pickle=False)
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.build_pdf', return_value=b'%PDF-full') as build:
+                response = self.client.post('/uploads/report.pdf', headers=self.headers,
+                    files={'file': ('scan.nii.gz', content),
+                           'gradcam': ('gradcam.npy', heatmap.getvalue())},
+                    data={'upload_id': uid, 'gradcam_slice': '2', 'patient_number': 'P-1042'})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(build.call_args.kwargs['predicted_class'], 'PDAC')
+            self.assertAlmostEqual(build.call_args.kwargs['pdac_probability'], 0.82)
+            np.testing.assert_array_equal(build.call_args.kwargs['gradcam'], np.ones((8, 8)))
+            self.assertEqual(build.call_args.kwargs['similar_cases'], neighbors)
+            self.assertEqual(build.call_args.args[0]['patient_id'], 'P-1042')
+
     def test_pancreas_mask_requires_owned_matching_upload(self):
         uid = '11111111-1111-4111-8111-111111111111'
         with tempfile.TemporaryDirectory() as directory:
@@ -174,6 +200,33 @@ class BackendTests(unittest.TestCase):
                                             files={'file':('scan.nii.gz', content)})
                 self.assertEqual(response.status_code, 409)
                 p3.assert_not_called()
+
+    def test_full_analysis_route_returns_model_outputs_without_embedding(self):
+        uid = '11111111-1111-4111-8111-111111111111'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'scan.nii.gz'
+            sitk.WriteImage(sitk.GetImageFromArray(np.ones((4, 8, 8), dtype=np.float32)), str(path))
+            content = path.read_bytes()
+            record = {'status': 'validated', 'sha256': hashlib.sha256(content).hexdigest()}
+            result = {
+                'pancreas_mask': np.ones((4, 8, 8), dtype=bool),
+                'lesion_mask': np.ones((4, 8, 8), dtype=bool),
+                'gradcam': np.ones((8, 8), dtype=np.float32), 'gradcam_slice': 2,
+                'predicted_class': 'PDAC', 'pdac_probability': 0.82, 'threshold': 0.42,
+                'neighbors': [{'patient_id': 'p2', 'label': 1, 'similarity': 0.91}],
+            }
+            with patch('app.api.db.get_upload', return_value=record), \
+                 patch('app.api.model_available', return_value=True), \
+                 patch('app.api.classifier_model_available', return_value=True), \
+                 patch('app.api.analyze_upload', return_value=result):
+                response = self.client.post(f'/uploads/{uid}/analysis', headers=self.headers,
+                                            files={'file': ('scan.nii.gz', content)})
+        self.assertEqual(response.status_code, 200, response.text)
+        with np.load(io.BytesIO(response.content), allow_pickle=False) as payload:
+            self.assertEqual(str(payload['predicted_class']), 'PDAC')
+            self.assertEqual(payload['neighbor_ids'].tolist(), ['p2'])
+            self.assertNotIn('embedding', payload.files)
+            self.assertIn('lesion', payload.files)
 
 
     def test_admin_authorization_and_doctor_creation(self):

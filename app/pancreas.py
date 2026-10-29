@@ -14,7 +14,7 @@ DEFAULT_MODEL = (PROJECT / 'data/private/models/P3_nnunet_2d_full'
                  / 'nnUNetTrainer_PanVision__nnUNetPlans__2d')
 SPACING_XYZ = (1.5, 1.5, 3.0)
 WINDOW_HU = (-100, 300)
-MAX_INFERENCE_VOXELS = 32_000_000
+MAX_INFERENCE_VOXELS = int(os.environ.get('PANVISION_MAX_INFERENCE_VOXELS', '96000000'))
 _PREDICT_LOCK = Lock()
 
 
