@@ -303,3 +303,4 @@ an empty PostgreSQL database, then run:
 
 The import preserves IDs, hashes, notes and timestamps, refuses a populated target,
 and opens the SQLite source read-only. Normal operation uses PostgreSQL only.
+

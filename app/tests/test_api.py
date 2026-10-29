@@ -305,3 +305,4 @@ class BackendTests(unittest.TestCase):
             session.assert_called_once_with('valid',touch=False)
         with patch('app.api.db.session_doctor',return_value=None):
             self.assertEqual(self.client.get('/auth/session',headers=self.headers).status_code,401)
+

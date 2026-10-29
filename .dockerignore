@@ -1,0 +1,15 @@
+.git
+.github
+.idea
+.venv
+.env
+.env.*
+data
+docs
+notebooks
+outputs
+models
+**/__pycache__
+**/*.pyc
+**/tests
+.DS_Store

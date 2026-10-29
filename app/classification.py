@@ -33,12 +33,22 @@ class ClassifierUnavailable(RuntimeError):
 
 def checkpoint_file():
     configured = os.environ.get('PANVISION_CLASSIFIER_CHECKPOINT')
-    return Path(configured).expanduser().resolve() if configured else DEFAULT_CHECKPOINT
+    if configured:
+        return Path(configured).expanduser().resolve()
+    folder = os.environ.get('PANVISION_CLASSIFIER_DIR')
+    return Path(folder).expanduser().resolve() / 'best.pt' if folder else DEFAULT_CHECKPOINT
 
 
 def metadata_file():
     configured = os.environ.get('PANVISION_CLASSIFIER_METADATA')
-    return Path(configured).expanduser().resolve() if configured else DEFAULT_METADATA
+    if configured:
+        return Path(configured).expanduser().resolve()
+    folder = os.environ.get('PANVISION_CLASSIFIER_DIR')
+    if not folder:
+        return DEFAULT_METADATA
+    root = Path(folder).expanduser().resolve()
+    embedding_metadata = root / 'embedding_metadata.json'
+    return embedding_metadata if embedding_metadata.is_file() else root / 'frozen_evaluation_config.json'
 
 
 def model_available():
@@ -53,9 +63,11 @@ def model_configuration():
     checkpoint_hash = hashlib.sha256(checkpoint_file().read_bytes()).hexdigest()
     if metadata.get('checkpoint_sha256') != checkpoint_hash:
         raise ClassifierUnavailable('Classifier checkpoint does not match its embedding metadata.')
-    if int(metadata.get('dimensions', 0)) != 512:
+    dimensions = metadata.get('dimensions', metadata.get('embedding_dimensions', 0))
+    if int(dimensions) != 512:
         raise ClassifierUnavailable('Classifier metadata does not declare a 512-D embedding.')
-    threshold = float(os.environ.get('PANVISION_CLASSIFIER_THRESHOLD', DEFAULT_THRESHOLD))
+    threshold = float(os.environ.get(
+        'PANVISION_CLASSIFIER_THRESHOLD', metadata.get('classification_threshold', DEFAULT_THRESHOLD)))
     if not 0 < threshold < 1:
         raise ClassifierUnavailable('Classifier threshold must be between zero and one.')
     return {'model_key': str(metadata.get('model') or MODEL_KEY),
@@ -183,3 +195,4 @@ def classify_scan(array, spacing_xyz, pancreas_mask):
                                    config['threshold'])
     result.update({'gradcam': projected, 'gradcam_slice': source_slice, **config})
     return result
+

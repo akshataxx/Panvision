@@ -211,3 +211,4 @@ class WorkspaceUITests(unittest.TestCase):
             app.sidebar.radio[0].set_value('Past Cases').run()
             self.assertFalse(app.exception,[e.message for e in app.exception])
             self.assertEqual(len(app.dataframe),2)
+

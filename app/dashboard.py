@@ -533,3 +533,4 @@ def main():
     except APIError as exc:
         st.error(str(exc))
     st.markdown('<div class="footer">PanVision · Research review only. Not for clinical diagnosis.</div>', unsafe_allow_html=True)
+

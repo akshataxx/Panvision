@@ -1,12 +1,36 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from app.classification import (aggregate_predictions, prepare_classifier_crops,
+                                checkpoint_file, metadata_file, model_configuration,
                                 project_gradcam_to_source)
 
 
 class ClassificationInferenceTests(unittest.TestCase):
+    def test_deployment_model_directory_uses_frozen_config(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            checkpoint = root / 'best.pt'
+            checkpoint.write_bytes(b'checkpoint')
+            (root / 'frozen_evaluation_config.json').write_text(json.dumps({
+                'checkpoint_sha256': hashlib.sha256(b'checkpoint').hexdigest(),
+                'embedding_dimensions': 512,
+                'classification_threshold': 0.42,
+            }))
+            with patch.dict(os.environ, {'PANVISION_CLASSIFIER_DIR': folder}, clear=True):
+                model_configuration.cache_clear()
+                self.addCleanup(model_configuration.cache_clear)
+                self.assertEqual(checkpoint_file(), checkpoint.resolve())
+                self.assertEqual(metadata_file(), (root / 'frozen_evaluation_config.json').resolve())
+                self.assertEqual(model_configuration()['threshold'], 0.42)
+
     def test_predicted_pancreas_crops_match_training_shape(self):
         array = np.linspace(-100, 300, 8 * 32 * 32, dtype=np.float32).reshape(8, 32, 32)
         mask = np.zeros_like(array, dtype=bool)
@@ -44,4 +68,5 @@ class ClassificationInferenceTests(unittest.TestCase):
         self.assertEqual(source_slice, 2)
         self.assertGreater(float(projected.max()), 0.9)
         self.assertEqual(float(projected[0, 0]), 0.0)
+
 

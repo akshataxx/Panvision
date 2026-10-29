@@ -18,7 +18,9 @@ def request(method, path, *, authenticated=True, timeout=60, **kwargs):
     parsed = urlsplit(base)
     if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
         raise APIError('Configure a valid PANVISION_API_URL without credentials.')
-    if parsed.scheme != 'https' and parsed.hostname not in ('localhost', '127.0.0.1', '::1'):
+    internal = {host.strip() for host in os.environ.get('PANVISION_INTERNAL_API_HOSTS', '').split(',')
+                if host.strip()}
+    if parsed.scheme != 'https' and parsed.hostname not in {'localhost', '127.0.0.1', '::1', *internal}:
         raise APIError('The remote API connection must use HTTPS.')
     token = st.session_state.get('api_token') if authenticated else None
     if authenticated and not token:
@@ -65,3 +67,4 @@ def sign_out():
         pass
     # If backend is unreachable, let the user retry revocation instead of pretending success.
     st.session_state.clear()
+

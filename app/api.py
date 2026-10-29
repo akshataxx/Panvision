@@ -480,3 +480,4 @@ def session_status(token: Annotated[str, Depends(credentials)]):
     if doctor is None:
         raise HTTPException(401, 'Session expired or invalid. Sign in again.', headers={'WWW-Authenticate':'Bearer'})
     return doctor
+

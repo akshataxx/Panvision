@@ -187,3 +187,4 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancr
     SimpleDocTemplate(output, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=32, bottomMargin=42,
                       title=f"PanVision - {case['study_id']}").build(story, onFirstPage=footer, onLaterPages=footer)
     return output.getvalue()
+
