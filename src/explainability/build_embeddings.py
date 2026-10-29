@@ -4,7 +4,8 @@ For every study in every split:
   1. read its saved crops (made by src/classification/make_crops.py; same pictures the
      classifier was trained and scored on)
   2. run the classifier's 512-number layer on every picture
-  3. average the pictures' fingerprints -> one fingerprint per study
+  3. combine the pictures' fingerprints -> one fingerprint per study (each scaled to
+     length 1, averaged, scaled to length 1 again: same rule as src/classification/export_embeddings.py)
 
 Output: outputs/embeddings.npz with study_ids, patient_ids, splits, labels, embeddings.
 retrieval.py later keeps TRAINING patients only as the search database.
@@ -19,7 +20,8 @@ import numpy as np
 import torch
 
 from model_loader import default_device, load_model, to_model_input
-from dataset import load_cache  # from src/classification (path added by model_loader)
+from retrieval import study_fingerprint
+from src.classification.dataset import load_cache
 
 
 def embed_images(model, images, device, batch_size=64):
@@ -55,7 +57,7 @@ def main():
             patient_ids.append(str(data["patient_ids"][data["patient_idx"][rows[0]]]))
             splits.append(split)
             labels.append(int(data["labels"][rows[0]]))
-            vectors.append(emb[rows].mean(axis=0))  # average of the study's pictures
+            vectors.append(study_fingerprint(emb[rows]))  # same rule as the database in export_embeddings.py
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     np.savez(

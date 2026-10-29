@@ -26,6 +26,20 @@ def _normalise(x):
     return x / np.maximum(length, 1e-12)  # the max() avoids dividing by zero
 
 
+def study_fingerprint(slice_embeddings):
+    """One fingerprint for a study from the fingerprints of its slices.
+
+    Same rule as src/classification/export_embeddings.py (mean_l2_embeddings), so the
+    database and a new query are always built the same way:
+      1. scale every slice's fingerprint to length 1
+      2. average them
+      3. scale the average to length 1
+    (Kept here, numpy only, so the app does not need pandas/sklearn just for this.)
+    """
+    vectors = _normalise(slice_embeddings)
+    return _normalise(vectors.mean(axis=0))
+
+
 def aggregate_by_patient(embeddings, patient_ids, labels):
     """Average the fingerprints of all rows that belong to the same patient.
 

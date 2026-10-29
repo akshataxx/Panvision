@@ -20,10 +20,10 @@ import numpy as np
 import torch
 from pytorch_grad_cam.utils.image import show_cam_on_image
 
-from model_loader import to_model_input  # first: it also makes src/classification importable
-from evaluation import patient_scores  # from src/classification
+from model_loader import to_model_input  # first: it also puts the repo root on the path
+from src.classification.evaluation import patient_scores
 from gradcam import generate_heatmap
-from retrieval import aggregate_by_patient, build_index, top_k
+from retrieval import aggregate_by_patient, build_index, study_fingerprint, top_k
 
 
 def load_index(embeddings_path):
@@ -65,7 +65,7 @@ def explain_study(model, index, npz_path, threshold, device="cpu", top_n=3, k=3,
                            "crop": crops[i], "heatmap": heat, "overlay": overlay})
 
     # Similar training patients. A patient never finds themselves.
-    similar = top_k(index, embeddings.mean(axis=0), k=k, exclude_patient_id=patient_id)
+    similar = top_k(index, study_fingerprint(embeddings), k=k, exclude_patient_id=patient_id)
     return {
         "patient_id": patient_id,
         "score": score,
