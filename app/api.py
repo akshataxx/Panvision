@@ -18,6 +18,8 @@ from app.data import case_index, default_root, load_case
 from app.reporting import build_pdf
 from app.pancreas import ModelUnavailable, ScanTooLarge, model_available, segment_pancreas
 from app.lesion import model_available as lesion_model_available, segment_lesion
+from app.classification import (NoPancreasRegion, classify_pdac, frozen_config,
+                                model_available as classifier_model_available)
 
 api = FastAPI(title='PanVision Research API', version='0.1.0')
 bearer = HTTPBearer(auto_error=False)
@@ -267,12 +269,58 @@ async def lesion_upload(upload_id: UUID, doctor: Annotated[dict, Depends(current
                     headers={'X-PanVision-Models': 'P3_nnunet_2d_full,L2_attention_unet_roi_full'})
 
 
+@api.post('/uploads/{upload_id}/classification')
+async def classification_upload(upload_id: UUID, doctor: Annotated[dict, Depends(current_doctor)],
+                                file: Annotated[UploadFile, File()]):
+    """Run P3 then the frozen PDAC classifier on the doctor's byte-matching validated upload."""
+    try:
+        record = await run_in_threadpool(db.get_upload, upload_id, doctor['id'])
+    except LookupError:
+        raise HTTPException(404, 'Upload not found.')
+    array, spacing, metadata = await read_upload(file)
+    if record['status'] != 'validated' or record['sha256'] != metadata['sha256']:
+        raise HTTPException(409, 'Uploaded file does not match the selected history record.')
+    if not model_available() or not classifier_model_available():
+        raise HTTPException(503, 'Pancreas or classification model is not configured on the backend.')
+    try:
+        pancreas_mask = await run_in_threadpool(segment_pancreas, array, spacing)
+        result = await run_in_threadpool(classify_pdac, array, spacing, pancreas_mask)
+    except ScanTooLarge:
+        raise HTTPException(413, 'Scan is too large for local classification.')
+    except NoPancreasRegion:
+        raise HTTPException(422, 'The pancreas model found no clear pancreas region, so classification cannot run.')
+    except ModelUnavailable:
+        raise HTTPException(503, 'Pancreas or classification model is not configured on the backend.')
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(503, 'PDAC classification could not complete for this scan.')
+    output = io.BytesIO()
+    np.savez_compressed(output, pancreas=pancreas_mask.astype(np.uint8),
+                        probability=result['probability'], threshold=result['threshold'],
+                        slices=result['slices'])
+    return Response(output.getvalue(), media_type='application/octet-stream',
+                    headers={'X-PanVision-Models': 'P3_nnunet_2d_full,densenet121_predicted'})
+
+
 @api.post('/uploads/report.pdf')
 async def upload_report(doctor: Annotated[dict, Depends(current_doctor)], file: Annotated[UploadFile, File()],
                         notes: Annotated[str, Form(max_length=10000)] = '',
                         display_mode: Annotated[Literal['auto', 'normalized', 'hu'], Form()] = 'auto',
-                        upload_id: Annotated[UUID | None, Form()] = None):
+                        upload_id: Annotated[UUID | None, Form()] = None,
+                        pancreas_mask: Annotated[UploadFile | None, File()] = None,
+                        pdac_probability: Annotated[float | None, Form(ge=0, le=1)] = None):
     from starlette.concurrency import run_in_threadpool
+    recorded_upload = upload_id is not None
+    if pancreas_mask is not None and not recorded_upload:
+        raise HTTPException(422, 'A validated upload is required for a pancreas overlay.')
+    if pdac_probability is not None and not recorded_upload:
+        raise HTTPException(422, 'A validated upload is required for a classification result.')
+    classification = None
+    if pdac_probability is not None:
+        try:
+            threshold = frozen_config()['threshold']
+        except (ModelUnavailable, OSError, ValueError, KeyError):
+            raise HTTPException(503, 'Classification model is not configured on the backend.')
+        classification = {'probability': pdac_probability, 'threshold': threshold}
     if upload_id is None:
         array, spacing, metadata, upload_id = await tracked_upload(file, doctor)
     else:
@@ -283,8 +331,17 @@ async def upload_report(doctor: Annotated[dict, Depends(current_doctor)], file: 
         array, spacing, metadata = await read_upload(file)
         if record['sha256'] != metadata['sha256'] or record['status'] != 'validated':
             raise HTTPException(409, 'Uploaded file does not match the selected history record.')
+    mask = None
+    if pancreas_mask is not None:
+        expected = (array.size + 7) // 8
+        packed = await pancreas_mask.read(expected + 1)
+        if len(packed) != expected or await pancreas_mask.read(1):
+            raise HTTPException(422, 'Pancreas mask size does not match the uploaded scan.')
+        mask = np.unpackbits(np.frombuffer(packed, dtype=np.uint8), count=array.size).reshape(array.shape).astype(bool)
     case = {'study_id': str(upload_id), 'source': 'upload', 'diagnosis': 'Unavailable'}
-    pdf = await run_in_threadpool(build_pdf, case, array, None, spacing, notes, display_mode=display_mode)
+    pdf = await run_in_threadpool(build_pdf, case, array, None, spacing, notes,
+                                  display_mode=display_mode, pancreas_mask=mask,
+                                  classification=classification)
     try:
         await run_in_threadpool(db.record_report, upload_id, doctor['id'], metadata['sha256'], notes)
     except LookupError:

@@ -1,0 +1,52 @@
+# Production stack on the VM. Lives in /opt/panvision next to .env.prod, Caddyfile and models/.
+# PANVISION_IMAGE is set by the deploy workflow (Artifact Registry image pinned to the commit SHA).
+services:
+  api:
+    image: ${PANVISION_IMAGE:-panvision:local}
+    command: python -m uvicorn app.api:api --host 0.0.0.0 --port 8001
+    env_file: .env.prod
+    environment:
+      PANVISION_PANCREAS_MODEL_DIR: /models/P3_nnunet_2d_full/nnUNetTrainer_PanVision__nnUNetPlans__2d
+      PANVISION_LESION_CHECKPOINT: /models/L2_attention_unet_roi_full/best.pt
+      PANVISION_CLASSIFIER_DIR: /models/densenet121_predicted
+    volumes:
+      - ./models:/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  web:
+    image: ${PANVISION_IMAGE:-panvision:local}
+    command: python -m streamlit run app/app.py
+    environment:
+      PANVISION_API_URL: http://api:8001
+      PANVISION_INTERNAL_API_HOSTS: api
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      STREAMLIT_SERVER_PORT: "8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PANVISION_DOMAIN: ${PANVISION_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
