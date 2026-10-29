@@ -1,5 +1,6 @@
 # explainability
-Grad-CAM heat maps and Top-3 similar-case retrieval, for whichever classifier the team picked.
+Grad-CAM heat maps, and offline evaluation of Top-3 similar-case retrieval, for whichever classifier the team picked.
+The dashboard's own KNN lives in `src/knn/`.
 
 ## Interface with the classifier
 - Input: a trained classifier saved by `src/classification` (weights plus notes) and the shared crops
@@ -7,7 +8,7 @@ Grad-CAM heat maps and Top-3 similar-case retrieval, for whichever classifier th
 - The classifier must offer `embedding(x)` (512 numbers), `forward(x)` (two scores) and `gradcam_layer`
        (last convolutional block). `model_loader.py` loads ResNet-50, DenseNet-121 or the small CNN from the
      checkpoint itself and is the one place to add a new network.
-- Retrieval database = training patients only. A query patient never retrieves themselves.
+- Retrieval evaluation database = training patients only. A query patient never retrieves themselves.
 
 ## Files
 - `model_loader.py`: loads the classifier; turns saved crops into model input exactly as in training
@@ -15,9 +16,9 @@ Grad-CAM heat maps and Top-3 similar-case retrieval, for whichever classifier th
 - `gradcam_patient.py`: Grad-CAM on the most suspicious slices of one study, with reference tumour slices marked
 - `slice_localisation.py`: are the model's most suspicious slices the tumour slices? (compared with chance)
 - `build_embeddings.py`: one 512-number fingerprint per study, from the shared crops, saved to `outputs/embeddings.npz`
-- `retrieval.py`: embedding index, Top-3 search, Precision@3 checks (numpy only)
+- `retrieval_eval.py`: offline helpers for the report: embedding index, Top-3 search, Precision@3 checks (numpy only). Not used by the app.
 - `evaluate_retrieval.py`: Precision@3 for validation (or test) patients against the training database
-- `explain.py`: one function the dashboard can call: score, key slices with heat maps, three similar cases
+- `explain.py`: one function the dashboard can call: score and key slices with heat maps
 - Earlier prototypes with the random stand-in model, kept for reference: `standin_model.py`,
   `crop_gradcam_scan.py`, `retrieval_demo.py`, `demo_gradcam.py`, `view_scan.py`
 

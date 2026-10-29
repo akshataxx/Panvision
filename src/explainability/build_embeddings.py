@@ -8,7 +8,7 @@ For every study in every split:
      length 1, averaged, scaled to length 1 again: same rule as src/classification/export_embeddings.py)
 
 Output: outputs/embeddings.npz with study_ids, patient_ids, splits, labels, embeddings.
-retrieval.py later keeps TRAINING patients only as the search database.
+retrieval_eval.py later keeps TRAINING patients only as the search database (for evaluation).
 
 Run from the repo root (a GPU, e.g. Colab, makes it much faster; it runs every picture once):
     python src/explainability/build_embeddings.py --model models/classifier.pt --crops outputs/crops
@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 from model_loader import default_device, load_model, to_model_input
-from retrieval import study_fingerprint
+from retrieval_eval import study_fingerprint
 from src.classification.dataset import load_cache
 
 

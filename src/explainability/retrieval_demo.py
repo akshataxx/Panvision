@@ -13,7 +13,7 @@ import argparse
 
 import numpy as np
 
-from retrieval import aggregate_by_patient, build_index, precision_at_k, top_k
+from retrieval_eval import aggregate_by_patient, build_index, precision_at_k, top_k
 
 
 def main():

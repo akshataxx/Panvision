@@ -14,7 +14,7 @@ import argparse
 
 import numpy as np
 
-from retrieval import aggregate_by_patient, build_index, precision_at_k_queries
+from retrieval_eval import aggregate_by_patient, build_index, precision_at_k_queries
 
 
 def main():

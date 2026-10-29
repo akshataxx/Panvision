@@ -1,20 +1,20 @@
-"""Everything the dashboard needs to explain one case, in one function.
+"""What the dashboard needs to explain one case: the patient score and the key slices with Grad-CAM.
 
-    from explain import load_index, explain_study
+    from explain import explain_study
     model, notes = load_model("models/classifier.pt")
-    index = load_index("outputs/embeddings.npz")
-    result = explain_study(model, index, "outputs/crops/100000_00001.npz", notes["threshold"])
+    result = explain_study(model, "outputs/crops/100000_00001.npz", threshold=notes["threshold"])
 
 `result` is a plain dictionary:
-    patient_id, score (0-1, average chance of PDAC over the slices), threshold,
+    patient_id, score (0-1, patient-level chance of PDAC), threshold,
     predicted_pdac (True/False),
     key_slices: the most suspicious slices, each with slice_index, probability, crop,
-                heatmap and overlay (arrays ready to show),
-    similar_cases: the 3 most similar TRAINING patients (patient_id, label, similarity).
+                heatmap and overlay (arrays ready to show).
+
+Similar cases are NOT in here: the app gets them from its own KNN (src/knn/). The offline
+retrieval evaluation for the report lives in retrieval_eval.py / evaluate_retrieval.py.
 
 It works for any classifier that provides embedding(), forward() and gradcam_layer
-(see model_loader.py). For now it reads a study's saved crops; once the segmentation
-step is connected, the crops can come from a newly uploaded scan instead.
+(see model_loader.py). For now it reads a study's saved crops.
 """
 import numpy as np
 import torch
@@ -23,16 +23,6 @@ from pytorch_grad_cam.utils.image import show_cam_on_image
 from model_loader import to_model_input  # first: it also puts the repo root on the path
 from src.classification.evaluation import patient_scores
 from gradcam import generate_heatmap
-from retrieval import aggregate_by_patient, build_index, study_fingerprint, top_k
-
-
-def load_index(embeddings_path):
-    """Search database from outputs/embeddings.npz: TRAINING patients only."""
-    data = np.load(embeddings_path)
-    train = data["splits"] == "train"
-    emb, ids, labels = aggregate_by_patient(
-        data["embeddings"][train], data["patient_ids"][train], data["labels"][train])
-    return build_index(emb, ids, labels)
 
 
 def score_slices(model, crops, device="cpu", batch_size=64):
@@ -46,11 +36,11 @@ def score_slices(model, crops, device="cpu", batch_size=64):
     return np.concatenate(probs), np.concatenate(embeddings)
 
 
-def explain_study(model, index, npz_path, threshold, device="cpu", top_n=3, k=3, aggregation="mean"):
+def explain_study(model, npz_path, threshold, device="cpu", top_n=3, aggregation="mean"):
     with np.load(npz_path) as f:
         crops, slice_idx, patient_id = f["crops"], f["slice_idx"], str(f["patient_id"])
 
-    probs, embeddings = score_slices(model, crops, device)
+    probs, _ = score_slices(model, crops, device)
     # Same rule as the scoring on the test patients. The threshold must have been chosen
     # on validation with this SAME rule (the checkpoint's "threshold" is for "mean").
     score = float(patient_scores(probs, np.zeros(len(probs), dtype=int), [0], aggregation)[0][0])
@@ -64,13 +54,10 @@ def explain_study(model, index, npz_path, threshold, device="cpu", top_n=3, k=3,
         key_slices.append({"slice_index": int(slice_idx[i]), "probability": float(probs[i]),
                            "crop": crops[i], "heatmap": heat, "overlay": overlay})
 
-    # Similar training patients. A patient never finds themselves.
-    similar = top_k(index, study_fingerprint(embeddings), k=k, exclude_patient_id=patient_id)
     return {
         "patient_id": patient_id,
         "score": score,
         "threshold": float(threshold),
         "predicted_pdac": bool(score >= threshold),
         "key_slices": key_slices,
-        "similar_cases": [{"patient_id": p, "label": int(l), "similarity": float(s)} for p, l, s in similar],
     }
