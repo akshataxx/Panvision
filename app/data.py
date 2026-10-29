@@ -130,3 +130,47 @@ def upload_lesion_slice(array, mask, z, display_mode='auto', opacity=0.55):
     rgb[region] = ((1 - opacity) * rgb[region] +
                    opacity * np.array([250, 101, 113])).astype(np.uint8)
     return rgb
+
+
+def _jet(values):
+    """The familiar blue -> cyan -> yellow -> red colour map. values 0-1 -> (..., 3) floats 0-1."""
+    v = np.clip(np.asarray(values, dtype=np.float32), 0, 1)
+    red = np.clip(1.5 - np.abs(4 * v - 3), 0, 1)
+    green = np.clip(1.5 - np.abs(4 * v - 2), 0, 1)
+    blue = np.clip(1.5 - np.abs(4 * v - 1), 0, 1)
+    return np.stack([red, green, blue], axis=-1)
+
+
+def gradcam_panels(crop, heat, image_weight=0.5):
+    """Three pictures of one Grad-CAM: the crop, the heat map, and the overlay on the crop.
+
+    crop: (H, W) whole numbers 0-255 (what the model saw); heat: (H, W) values 0-1.
+    Returns (crop_rgb, heat_rgb, overlay_rgb), each (H, W, 3) uint8. The overlay is built
+    the same way as pytorch_grad_cam's show_cam_on_image (half picture, half heat map).
+    """
+    crop = np.asarray(crop)
+    heat = np.asarray(heat, dtype=np.float32)
+    if crop.ndim != 2 or crop.shape != heat.shape or not np.isfinite(heat).all():
+        raise ValueError('Grad-CAM crop and heat map must be matching 2D arrays.')
+    gray = np.clip(crop.astype(np.float32) / 255.0, 0, 1)
+    gray_rgb = np.repeat(gray[..., None], 3, axis=-1)
+    heat_rgb = _jet(heat)
+    overlay = (1 - image_weight) * heat_rgb + image_weight * gray_rgb
+    overlay = overlay / max(float(overlay.max()), 1e-6)
+
+    def to_uint8(picture):
+        return np.clip(picture * 255, 0, 255).astype(np.uint8)
+
+    return to_uint8(gray_rgb), to_uint8(heat_rgb), to_uint8(overlay)
+
+
+def upload_gradcam_slice(array, heatmap, z, display_mode='auto', opacity=0.7):
+    """Overlay full-slice Grad-CAM attention on the original uploaded CT."""
+    heatmap = np.asarray(heatmap, dtype=np.float32)
+    if heatmap.shape != array.shape[1:] or not np.isfinite(heatmap).all():
+        raise ValueError('Grad-CAM does not align with the uploaded CT slice.')
+    rgb = upload_rgb_slice(array, z, display_mode).astype(np.float32)
+    strength = np.clip(heatmap, 0, 1)
+    color = _jet(strength) * 255                 # multicoloured: blue (weak) -> red (strong)
+    alpha = (opacity * strength)[..., None]      # weak attention stays see-through
+    return np.clip((1 - alpha) * rgb + alpha * color, 0, 255).astype(np.uint8)

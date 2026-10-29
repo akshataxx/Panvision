@@ -3,10 +3,9 @@
 PanVision is a research workspace for reviewing pancreatic CT scans. It combines
 a green-and-cream Streamlit dashboard, a FastAPI backend, and PostgreSQL account,
 upload-history and audit tables. It is an academic prototype, not a clinical
-system. P3 pancreas segmentation, L2 lesion segmentation and DenseNet-121 PDAC
-classification can run when their model files and inference dependencies are
-installed. Grad-CAM and retrieval are not connected; the interface does not invent
-their results.
+system. P3 pancreas segmentation can run when its model files and inference
+dependencies are installed. A configured frozen DenseNet checkpoint
+adds PDAC scoring, Grad-CAM and train-reference KNN retrieval from Neon.
 
 ## Folder structure
 
@@ -17,6 +16,8 @@ app/
 ├── auth.py                # Login screen and non-renewing idle-session monitor
 ├── api_client.py          # Server-side Streamlit → FastAPI HTTP requests
 ├── api.py                 # API routes, request validation and authorization
+├── inference.py           # P3 → crop → DenseNet → KNN orchestration
+├── classification.py      # Predicted-pancreas crops, DenseNet and Grad-CAM inference
 ├── database.py            # PostgreSQL schema, accounts, sessions, history and CLI
 ├── validation.py          # Bounded CT file/geometry/intensity validation
 ├── data.py                # Image display helpers and optional research-case reader
@@ -49,11 +50,17 @@ Browser → Streamlit (8501) → FastAPI (8001) → PostgreSQL
 
 1. An administrator provisions doctor accounts; there is no public registration.
 2. A doctor signs in and sees Home with empty imaging/result panels.
-3. Upload CT → Validate and open report sends the scan to FastAPI for validation.
+3. Selecting a CT validates it and opens Case Report. The doctor explicitly starts
+   the full model pipeline with **Run full AI analysis**.
 4. The API records uploader identity and scan metadata. Streamlit keeps a temporary
-   local preview of the validated file and opens Case Report.
-5. The doctor reviews slices, saves notes, and prepares/downloads a PDF.
-6. PostgreSQL retains upload history, notes and events across logins. CT bytes and
+   local preview while P3 pancreas segmentation, L2 lesion segmentation,
+   predicted-pancreas cropping, DenseNet classification, Grad-CAM and
+   train-reference KNN retrieval run.
+5. Case Report shows the prediction, pancreas and lesion overlays, mapped
+   full-slice Grad-CAM and three cosine-nearest training references.
+6. The doctor reviews slices, saves notes, and prepares/downloads a PDF. Lesion
+   output remains available in the interactive UI but is excluded from the PDF.
+7. PostgreSQL retains upload history, notes and events across logins. CT bytes and
    generated PDF bytes are not stored in PostgreSQL or retained as shared files.
 
 Only FastAPI needs the database URL. Streamlit uses `PANVISION_API_URL` and keeps
@@ -64,11 +71,11 @@ The upload-first workflow needs no OneDrive dataset directory.
 
 | Screen | Behavior |
 | --- | --- |
-| Home | Scan metadata strip, CT preview, model-output tabs, prediction/measurement/reference cards, findings and actions |
-| Upload CT | NIfTI/MHA uploader, validation and automatic navigation to the report |
-| Case Report | Uploaded CT, P3 pancreas and L2 lesion mask overlays, slice/display controls, geometry, saved notes and PDF generation/download |
+| Home | Scan metadata strip, CT/pancreas/lesion/Grad-CAM panels, prediction/reference results, findings and actions |
+| Upload CT | NIfTI/MHA uploader followed by validation and report navigation |
+| Case Report | Explicit analysis action, interactive CT/pancreas/lesion views, mapped Grad-CAM, classification, KNN references, notes and PDF generation without lesion output |
 | Past Cases | Signed-in doctor's persistent own-upload history, validation status and event timeline |
-| Similar Cases | Explicit unavailable state until trained retrieval is connected |
+| Similar Cases | Top-three training references after full analysis; never validation/test references |
 | My Profile | Own name/email/role plus current-password-verified password changes for both roles |
 | Administration | Admin-only account creation/access control, uploader-filtered history, database counts and audit events |
 
@@ -156,7 +163,7 @@ so set it explicitly when using 8001. Sign in as the administrator and add docto
 through Administration → Add doctor. A private `create-doctor` maintenance CLI
 also exists for operators with database credentials; it is not public registration.
 
-### Optional: run P3 pancreas and L2 lesion segmentation
+### Configure the inference pipeline
 
 Install the inference dependencies in the same virtual environment:
 
@@ -173,43 +180,35 @@ data/private/models/P3_nnunet_2d_full/nnUNetTrainer_PanVision__nnUNetPlans__2d/
 
 Alternatively, set `PANVISION_PANCREAS_MODEL_DIR` in the root `.env` to the
 absolute path of that trainer folder. Restart FastAPI after changing model files
-or configuration. Put the completed L2 checkpoint at
-`data/private/models/L2_attention_unet_roi_full/best.pt`, or set
-`PANVISION_LESION_CHECKPOINT` in the root `.env` to its absolute path. The checkpoint
-must be the completed `L2_attention_unet_roi_full` `best.pt` (step 4000, `max_train=0`).
-No batch predictions or retraining are needed for an uploaded scan. After validation,
-open **Lesion** and click **Run lesion segmentation**. The backend runs P3 to find the
-pancreas, then uses that mask to define L2's ROI and returns both masks in the
-uploaded CT grid. The **Pancreas** tab can also run P3 alone. The backend
-uses the training preprocessing (LPS, 1.5 × 1.5 × 3 mm, −100 to 300 HU), runs fold 0's
-best checkpoint, and aligns both predicted masks with the uploaded CT. Green is
-pancreas; coral is lesion. The lesion volume card measures the predicted mask,
-not a PDAC classification or confirmed tumour volume. The optional lesion overlay
-is a model-proposed region, not a diagnosis. On the held-out test split, P3→L2
-had mean lesion Dice 0.384 across 84 annotated lesion scans and marked a region
-in 152 of 234 negative scans (65% false-positive rate). These test figures are
-provisional because the existing P3 prediction folder contains duplicate study
-variants whose source provenance has not been fully audited. L2's training-time
-reference-ROI Dice of 0.3864 uses the reference pancreas mask and should not be
-reported as the end-to-end score.
-Local inference accepts scans up to 32 million voxels and may take several minutes
-on a CPU. The masks live only in the current Streamlit session. The PDF includes
-the CT preview, notes, and a pancreas overlay when the model marks a region, but
-no lesion overlay. Persistent results belong to the later case-storage work.
+or configuration. The backend uses the training preprocessing (LPS, 1.5 × 1.5 ×
+3 mm, −100 to 300 HU), runs fold 0's best checkpoint, and aligns the predicted
+pancreas with the uploaded CT. Local inference accepts scans up to 96 million
+voxels by default (`PANVISION_MAX_INFERENCE_VOXELS` can override this) and may
+take several minutes on a CPU. The full analysis also runs the configured L2
+lesion model and includes its overlay in the interactive UI only, not the PDF report.
 
-### Optional: run PDAC classification
+### Configure DenseNet, Grad-CAM and KNN
 
-Copy the frozen DenseNet-121 run into `data/private/models/densenet121_predicted/`,
-or set `PANVISION_CLASSIFIER_DIR` to that folder. It needs `best.pt` and
-`frozen_evaluation_config.json`; the checkpoint's SHA-256 must match the config, so
-a swapped or retrained checkpoint is refused until its evaluation config is frozen too.
-On the Case Report, **Run PDAC classification** runs P3, then crops up to 24 clear
-pancreas slices exactly as `src/classification/make_predicted_crops.py` did for
-training (preprocessed grid, fixed 144 mm window, 224 × 224), averages the slice
-probabilities and applies the validation-chosen threshold (0.42). The card and PDF show
-the probability, threshold and PDAC / Non-PDAC estimate. Validation only (334 patients):
-AUC 0.91, sensitivity 84%, specificity 85%; the held-out test set has not been evaluated.
-It is a research estimate, not a diagnosis.
+Place the frozen DenseNet checkpoint and its matching embedding metadata at:
+
+```text
+data/private/models/classification/best.pt
+data/private/models/classification/embedding_metadata.json
+```
+
+Or set `PANVISION_CLASSIFIER_CHECKPOINT` and `PANVISION_CLASSIFIER_METADATA` to
+their absolute paths. The metadata checkpoint SHA-256 must match `best.pt` and
+declare 512 embedding dimensions. `PANVISION_CLASSIFIER_THRESHOLD` optionally
+overrides the frozen validation threshold (default `0.4195498807063755`).
+
+The same `PANVISION_DATABASE_URL` database must contain the model-versioned,
+train-only `case_embeddings` rows created by `src.knn.neon_embeddings`. Full
+analysis creates the query embedding in memory, sends it to PostgreSQL for cosine
+retrieval, and returns only patient IDs, dataset labels and similarities. It does
+not return or persist the query embedding or CT bytes. Grad-CAM is computed on the
+hottest predicted-pancreas crop, because that is the actual DenseNet input, then
+projected back onto the corresponding full CT slice for anatomical context. It is
+attention, not lesion localization or a causal explanation.
 
 ## PostgreSQL tables
 
@@ -219,6 +218,7 @@ It is a research estimate, not a diagnosis.
 | `doctor_sessions` | SHA-256 token hashes, expiry and last activity; never plaintext tokens |
 | `scan_uploads` | Uploader ID, filename, file digest/size, geometry, validation status, notes and timestamps |
 | `scan_events` | Validation/rejection, note-save and PDF-generation events |
+| `scan_analyses` | Model/checkpoint provenance, PDAC score and top-three reference metadata; no scans, masks or embeddings |
 | `admin_audit` | Account-access and password-change metadata, without passwords or report content |
 | `doctor_cases` | Doctor-owned notes for the optional research-dataset API |
 
@@ -249,8 +249,9 @@ to an upload ID requires matching ownership and file digest.
   does not establish acquisition calibration or diagnostic suitability.
 
 CT data, masks and model weights belong in separately configured private file
-storage, not Git or PostgreSQL. Upload metadata/notes are persistent; CT files
-remain temporary. Persistent scan/PDF storage is future integration work. Deployments still need HTTPS, trusted PostgreSQL TLS,
+storage, not Git or PostgreSQL. Upload metadata/notes are persistent; CT files,
+query embeddings and inference arrays remain temporary. Persistent scan/PDF and
+model-result storage are future integration work. Deployments still need HTTPS, trusted PostgreSQL TLS,
 proxy upload-size limits, login/upload rate limiting, backups, retention controls
 and appropriate authorization before handling identifiable patient data.
 
@@ -265,7 +266,7 @@ and appropriate authorization before handling identifiable patient data.
 | `POST /uploads/validate` | Validate multipart CT and return its recorded upload ID |
 | `POST /uploads/{id}/pancreas` | Run P3 pancreas segmentation for a doctor's byte-matching validated upload |
 | `POST /uploads/{id}/lesion` | Run P3 then L2 and return both masks for a doctor's byte-matching validated upload |
-| `POST /uploads/{id}/classification` | Run P3 then the frozen DenseNet classifier; return the pancreas mask, PDAC probability and threshold |
+| `POST /uploads/{id}/analysis` | Run P3, predicted-pancreas cropping, DenseNet, Grad-CAM and train-only top-3 KNN for a byte-matching validated upload |
 | `POST /uploads/report.pdf` | Generate PDF from CT, notes, display mode and optional recorded upload ID |
 | `GET /me/uploads` | Own paginated upload history |
 | `GET /uploads/{id}`, `PUT /uploads/{id}/notes` | Authorized detail and owner-only notes |
@@ -302,3 +303,4 @@ an empty PostgreSQL database, then run:
 
 The import preserves IDs, hashes, notes and timestamps, refuses a populated target,
 and opens the SQLite source read-only. Normal operation uses PostgreSQL only.
+

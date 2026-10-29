@@ -47,7 +47,7 @@ class DashboardDataTests(unittest.TestCase):
             self.assertEqual(len(errors), 1)
 
     def test_normalized_upload_keeps_display_contrast(self):
-        from app.data import upload_rgb_slice, upload_pancreas_slice
+        from app.data import upload_gradcam_slice, upload_rgb_slice, upload_pancreas_slice
         array = np.linspace(0, 1, 64, dtype=np.float32).reshape(1, 8, 8)
         rendered = upload_rgb_slice(array, 0)
         self.assertEqual(int(rendered.min()), 0)
@@ -59,3 +59,8 @@ class DashboardDataTests(unittest.TestCase):
         overlay = upload_pancreas_slice(array, mask, 0)
         self.assertGreater(overlay[2, 2, 1], rendered[2, 2, 1])
         np.testing.assert_array_equal(overlay[0, 0], rendered[0, 0])
+        heatmap = np.zeros((8, 8), dtype=np.float32)
+        heatmap[3:5, 3:5] = 1
+        attention = upload_gradcam_slice(array, heatmap, 0)
+        self.assertGreater(attention[3, 3, 0], rendered[3, 3, 0])
+        np.testing.assert_array_equal(attention[0, 0], rendered[0, 0])
