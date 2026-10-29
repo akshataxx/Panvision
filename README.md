@@ -103,8 +103,7 @@ The data come from the public PANORAMA challenge dataset; see the report for the
 |---|---|
 | Miti | |
 | Akshata | Pancreas and lesion segmentation cascade (U-Net, nnU-Net P3), lesion optimisation (threshold/size tuning, augmentation experiments, L2/L5 ensemble),integrating segmentation and lesion inference into the upload workflow, integrating the DenseNet-121 PDAC classifier into the API, dashboard and report, pancreas segmentation overlay in the PDF report,
-review notes in the case report, dashboard UI improvements (CT preview layout, analysis status, lesion overlay notes), Docker deployment to
-GCP Compute Engine with GitHub Actions CI/CD, Documentation |
+review notes in the case report, dashboard UI improvements (CT preview layout, analysis status, lesion overlay notes), Docker deployment to GCP Compute Engine with GitHub Actions CI/CD, Documentation |
 | Hrihaan | Repository setup, ResNet-50 classifier, explainability (Grad-CAM, similar-case evaluation), Documentation 
 
 Working rules: Never commit CT data, model weights, `.env` files or connection strings.
