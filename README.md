@@ -105,7 +105,7 @@ The data come from the public PANORAMA challenge dataset; see the report for the
 | Akshata | |
 | Hrihaan | Repository setup, ResNet-50 classifier, explainability (Grad-CAM, similar-case evaluation), Documentation |
 
-Working rules: see `TEAM_GUIDE.md`. Never commit CT data, model weights, `.env` files or connection strings.
+Working rules: Never commit CT data, model weights, `.env` files or connection strings.
 
 ## Deliverables
 
