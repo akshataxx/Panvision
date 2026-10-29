@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from research.classification.experiment_utils import audit_crops, score_metrics, threshold_on_validation
+from src.classification.experiment_utils import audit_crops, score_metrics, threshold_on_validation
 
 
 class ExperimentTests(unittest.TestCase):
@@ -32,8 +32,22 @@ class ExperimentTests(unittest.TestCase):
             frame, window = audit_crops(root, split)
             self.assertEqual(len(frame), 1)
             self.assertEqual(window, 144)
+            self.assertEqual(frame.crop_source.tolist(), ['annotation_assisted'])
             for field, bad in [('split','test'), ('label',0)]:
                 with self.subTest(field=field):
                     np.savez(crop, **{**values, field:bad})
                     with self.assertRaisesRegex(ValueError, 'mismatch'):
                         audit_crops(root, split)
+
+    def test_audit_rejects_unknown_crop_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            split = root / 'splits.csv'
+            split.write_text('patient_id,split,label\n100000,train,1\n')
+            np.savez(root / '100000_00001.npz', patient_id='100000',
+                     study_id='100000_00001', split='train', label=1,
+                     crops=np.zeros((1, 224, 224), np.uint8),
+                     has_lesion=np.array([False]), slice_idx=np.array([0]),
+                     window_mm=144., crop_source='predicted_pancrease')
+            with self.assertRaisesRegex(ValueError, 'Unknown crop source'):
+                audit_crops(root, split)

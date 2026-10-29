@@ -6,7 +6,18 @@ import io
 
 from PIL import Image
 
-from app.data import annotation_volume, initial_slice, rgb_slice, upload_rgb_slice, upload_display_mode
+from app.data import (annotation_volume, initial_slice, rgb_slice, upload_rgb_slice,
+                      upload_pancreas_slice, upload_display_mode)
+
+CLASSIFIER_CAVEAT = ('Research model (DenseNet-121 on predicted-pancreas crops) · Validation only, 334 patients: '
+                     'AUC 0.91, sensitivity 84%, specificity 85%. Not yet evaluated on the held-out test set. '
+                     'Not a diagnosis.')
+
+
+def classification_text(classification):
+    probability, threshold = classification['probability'], classification['threshold']
+    label = 'PDAC suspected' if probability >= threshold else 'Non-PDAC'
+    return f'{label} (model probability {probability:.2f}; decision threshold {threshold:.2f})'
 
 
 def build_report(case, array, labels, spacing, notes=''):
@@ -46,7 +57,8 @@ confidence, segmentation predictions, Grad-CAM, and similar-case retrieval are u
 <p><small>Academic research prototype. Not for clinical diagnosis or treatment. Source labels and annotations are not model predictions.</small></p></body></html>'''
 
 
-def build_pdf(case, array, labels, spacing, notes='', display_mode='auto'):
+def build_pdf(case, array, labels, spacing, notes='', display_mode='auto', pancreas_mask=None,
+              classification=None):
     """Return a portable PDF using real case evidence and no external services."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
@@ -55,6 +67,9 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto'):
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as PDFImage
 
     uploaded = case.get('source') == 'upload'
+    if pancreas_mask is not None and (not uploaded or pancreas_mask.shape != array.shape):
+        raise ValueError('Pancreas mask does not match the uploaded scan.')
+    pancreas_region = pancreas_mask is not None and bool(pancreas_mask.any())
     output = io.BytesIO()
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle('Section', fontSize=12, leading=17, textColor=colors.HexColor('#354b35'),
@@ -64,7 +79,7 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto'):
     def paragraph(value, style='BodyText'):
         return Paragraph(html.escape(str(value)).replace('\n', '<br/>'), styles[style])
     story = [paragraph('PanVision', 'Title'), paragraph('Pancreatic CT Research Report', 'Heading2'),
-             paragraph('Research use only. Dataset evidence, not a clinical diagnosis.', 'SmallNote')]
+             paragraph('Research use only. Model overlays are estimates, not a clinical diagnosis.', 'SmallNote')]
     def section(title):
         story.append(paragraph(title, 'Section'))
     def table(rows):
@@ -82,22 +97,36 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto'):
            ('Annotation tier', case.get('annotation_tier', 'Unavailable'))]))
     section('2. Diagnosis and measurements')
     value = annotation_volume(labels, spacing)
-    table([('Diagnosis' if uploaded else 'Dataset diagnosis', case.get('diagnosis', 'Unavailable')),
-           ('Model prediction', 'Not available - trained model not connected'),
-           ('Annotated lesion volume', f'{value:.2f} cm3' if value is not None else 'Unavailable'),
-           ('Voxel spacing (XYZ)', ' x '.join(f'{v:.2f}' for v in spacing) + ' mm')])
-    evidence = ('Uploaded volume passed structural validation. This PDF contains the CT preview and review notes; '
-                'a pancreas mask shown in the workspace is not included in this PDF.' if uploaded
+    rows = [('Diagnosis' if uploaded else 'Dataset diagnosis', case.get('diagnosis', 'Unavailable')),
+            ('Model prediction', classification_text(classification) if uploaded and classification
+             else 'Not run' if uploaded else 'Not available - trained model not connected')]
+    if uploaded:
+        rows.append(('Pancreas segmentation', 'Model overlay included' if pancreas_region else
+                     'No region marked by model' if pancreas_mask is not None else 'Not run'))
+    else:
+        rows.append(('Annotated lesion volume', f'{value:.2f} cm3' if value is not None else 'Unavailable'))
+    rows.append(('Voxel spacing (XYZ)', ' x '.join(f'{v:.2f}' for v in spacing) + ' mm'))
+    table(rows)
+    evidence = ('Uploaded volume passed structural validation. This PDF includes the CT preview and review notes; '
+                'the pancreas overlay is a model estimate when present. Lesion segmentation is not included.' if uploaded
                 else 'Diagnosis is the PANORAMA source label. Volume comes from supplied annotations.')
-    story.extend([Spacer(1, 8), paragraph(evidence + ' Model probability, confidence, diameter, location, Grad-CAM '
-                                        'and similar-case retrieval are unavailable.', 'SmallNote')])
+    unavailable = (' Diameter, location, Grad-CAM and similar-case retrieval are unavailable.'
+                   if uploaded and classification else ' Model probability, confidence, diameter, location, Grad-CAM '
+                   'and similar-case retrieval are unavailable.')
+    story.extend([Spacer(1, 8), paragraph(evidence + unavailable, 'SmallNote')])
+    if uploaded and classification:
+        story.append(paragraph(CLASSIFIER_CAVEAT, 'SmallNote'))
     section('3. Visual results')
-    z = initial_slice(array, labels)
+    z = (int(pancreas_mask.sum(axis=(1, 2)).argmax()) if uploaded and pancreas_region
+         else initial_slice(array, labels))
     images, captions = [], []
-    panels = [('Uploaded CT', 'ct')] if uploaded else [('CT scan', 'ct'), ('Pancreas annotation', 'pancreas'), ('Lesion annotation', 'lesion')]
+    panels = ([('Uploaded CT', 'ct')] + ([('Predicted pancreas overlay', 'pancreas')] if pancreas_region else [])
+              if uploaded else [('CT scan', 'ct'), ('Pancreas annotation', 'pancreas'), ('Lesion annotation', 'lesion')])
     for title, mode in panels:
         buffer = io.BytesIO()
-        Image.fromarray(upload_rgb_slice(array, z, display_mode) if uploaded else rgb_slice(array, labels, z, mode)).save(buffer, format='PNG')
+        pixels = (upload_pancreas_slice(array, pancreas_mask, z, display_mode) if uploaded and mode == 'pancreas'
+                  else upload_rgb_slice(array, z, display_mode) if uploaded else rgb_slice(array, labels, z, mode))
+        Image.fromarray(pixels).save(buffer, format='PNG')
         buffer.seek(0)
         image = PDFImage(buffer)
         ratio = 160 / max(image.imageWidth, image.imageHeight)
@@ -109,7 +138,8 @@ def build_pdf(case, array, labels, spacing, notes='', display_mode='auto'):
     story.append(figures)
     resolved = upload_display_mode(array) if display_mode == 'auto' else display_mode
     display_label = 'normalized 0-1 display' if resolved == 'normalized' else '-100 to 300 HU display window'
-    legend = (f'Uploaded CT shown with {display_label}. No annotation masks available.' if uploaded
+    legend = (f'Uploaded CT shown with {display_label}. Green: model-estimated pancreas.' if uploaded and pancreas_region
+              else f'Uploaded CT shown with {display_label}. No pancreas model output included.' if uploaded
               else 'Green: pancreas. Coral: lesion. Dataset annotations, not predicted segmentations.')
     story.append(paragraph(f'Slice {z+1} of {len(array)}. ' + legend, 'SmallNote'))
     section('4. Review notes')

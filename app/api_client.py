@@ -18,7 +18,9 @@ def request(method, path, *, authenticated=True, timeout=60, **kwargs):
     parsed = urlsplit(base)
     if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
         raise APIError('Configure a valid PANVISION_API_URL without credentials.')
-    if parsed.scheme != 'https' and parsed.hostname not in ('localhost', '127.0.0.1', '::1'):
+    # PANVISION_INTERNAL_API_HOSTS names private-network hosts (e.g. the Docker Compose service) allowed over HTTP.
+    internal = {h.strip() for h in os.environ.get('PANVISION_INTERNAL_API_HOSTS', '').split(',') if h.strip()}
+    if parsed.scheme != 'https' and parsed.hostname not in {'localhost', '127.0.0.1', '::1', *internal}:
         raise APIError('The remote API connection must use HTTPS.')
     token = st.session_state.get('api_token') if authenticated else None
     if authenticated and not token:
@@ -31,10 +33,14 @@ def request(method, path, *, authenticated=True, timeout=60, **kwargs):
     if response.status_code == 401 and authenticated:
         raise SessionExpired('Your session expired. Sign in again.')
     if response.is_error or response.is_redirect:
-        if response.status_code == 413 and path.endswith('/pancreas'):
-            raise APIError('This scan is too large for local pancreas segmentation.')
-        if response.status_code == 503 and path.endswith('/pancreas'):
-            raise APIError('Pancreas segmentation is unavailable. Check the backend model files and try again.')
+        if response.status_code == 413 and path.endswith(('/pancreas', '/lesion', '/classification')):
+            raise APIError('This scan is too large for local segmentation.')
+        if response.status_code == 503 and path.endswith(('/pancreas', '/lesion')):
+            raise APIError('Segmentation is unavailable. Check the backend model files and try again.')
+        if response.status_code == 503 and path.endswith('/classification'):
+            raise APIError('Classification is unavailable. Check the backend model files and try again.')
+        if response.status_code == 422 and path.endswith('/classification'):
+            raise APIError('No clear pancreas region was found, so this scan cannot be classified.')
         if response.status_code == 422:
             raise APIError('Check the email, study ID, or notes. Notes must be at most 10,000 characters.')
         # Never forward raw proxy errors, tracebacks, or credential-bearing URLs.

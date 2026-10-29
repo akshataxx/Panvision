@@ -58,8 +58,13 @@ def main(default_model=None):
     model = (module.SimpleCNNClassifier() if args.model == 'cnn' else module.DenseNet121Classifier()).to(device)
     output = Path(args.out)
     output.mkdir(parents=True, exist_ok=False)
+    crop_source = audit.crop_source.iloc[0]
+    prediction_id = (audit.prediction_id.iloc[0] if crop_source == 'predicted_pancreas' else None)
     config = {**vars(args), 'splits_sha256': file_hash(args.splits), 'window_mm': window,
-              'scope': 'annotation-assisted crops; not deployment evaluation', 'aggregation': 'mean'}
+              'crop_source': crop_source, 'prediction_id': prediction_id,
+              'scope': ('segmentation-predicted pancreas crops' if crop_source == 'predicted_pancreas'
+                        else 'annotation-assisted crops; not deployment evaluation'),
+              'aggregation': 'mean'}
     (output/'config.json').write_text(json.dumps(config, indent=2))
     audit.to_csv(output/'crop_audit.csv', index=False)
     loss_fn = torch.nn.CrossEntropyLoss(weight=torch.tensor([1., train.pos_weight()], device=device))
