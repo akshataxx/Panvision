@@ -34,8 +34,14 @@ class PancreasGeometryTests(unittest.TestCase):
         self.assertEqual(mask.dtype, np.bool_)
 
     def test_large_scan_is_rejected_before_loading_model(self):
-        huge = np.broadcast_to(np.array(0, dtype=np.float32), (2, 2, 8_000_001))
+        huge = np.broadcast_to(np.array(0, dtype=np.float32), (2, 2, 24_000_001))
         with patch('app.pancreas._predictor') as predictor:
             with self.assertRaises(ScanTooLarge):
                 segment_pancreas(huge, (1, 1, 1))
             predictor.assert_not_called()
+
+    def test_standard_high_resolution_scan_reaches_preprocessing(self):
+        scan = np.broadcast_to(np.array(0, dtype=np.float32), (60, 768, 768))
+        with patch('app.pancreas.prepare_volume', side_effect=RuntimeError('entered preprocessing')):
+            with self.assertRaisesRegex(RuntimeError, 'entered preprocessing'):
+                segment_pancreas(scan, (1, 1, 1))

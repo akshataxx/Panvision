@@ -1,6 +1,4 @@
-"""PDAC classifier crop geometry, frozen decision rule and checkpoint guard."""
-
-import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,81 +8,65 @@ from unittest.mock import patch
 
 import numpy as np
 
-from app.classification import NoPancreasRegion, classify_pdac, frozen_config, model_available
-
-INFERENCE = all(importlib.util.find_spec(name) for name in ('torch', 'torchvision', 'sklearn'))
-
-
-def scan_with_pancreas():
-    array = np.full((12, 64, 64), 40, dtype=np.float32)
-    pancreas = np.zeros(array.shape, dtype=bool)
-    pancreas[3:9, 20:44, 16:48] = True
-    return array, pancreas
+from app.classification import (aggregate_predictions, prepare_classifier_crops,
+                                checkpoint_file, metadata_file, model_configuration,
+                                project_gradcam_to_source)
 
 
-@unittest.skipUnless(INFERENCE, 'Install app/inference-requirements.txt')
-class ClassificationTests(unittest.TestCase):
-    def test_crops_match_training_and_use_frozen_rule(self):
-        import torch
+class ClassificationInferenceTests(unittest.TestCase):
+    def test_deployment_model_directory_uses_frozen_config(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            checkpoint = root / 'best.pt'
+            checkpoint.write_bytes(b'checkpoint')
+            (root / 'frozen_evaluation_config.json').write_text(json.dumps({
+                'checkpoint_sha256': hashlib.sha256(b'checkpoint').hexdigest(),
+                'embedding_dimensions': 512,
+                'classification_threshold': 0.42,
+            }))
+            with patch.dict(os.environ, {'PANVISION_CLASSIFIER_DIR': folder}, clear=True):
+                model_configuration.cache_clear()
+                self.addCleanup(model_configuration.cache_clear)
+                self.assertEqual(checkpoint_file(), checkpoint.resolve())
+                self.assertEqual(metadata_file(), (root / 'frozen_evaluation_config.json').resolve())
+                self.assertEqual(model_configuration()['threshold'], 0.42)
 
-        seen = {}
+    def test_predicted_pancreas_crops_match_training_shape(self):
+        array = np.linspace(-100, 300, 8 * 32 * 32, dtype=np.float32).reshape(8, 32, 32)
+        mask = np.zeros_like(array, dtype=bool)
+        mask[2:7, 10:22, 11:23] = True
 
-        class Model(torch.nn.Module):
-            def forward(self, x):
-                seen['shape'] = tuple(x.shape)
-                # Slice probabilities 0.2 and 0.6 alternate; their mean is 0.4.
-                p = torch.tensor([0.2, 0.6]).repeat(len(x))[:len(x)]
-                return torch.stack([torch.log(1 - p), torch.log(p)], dim=1)
+        crops, slices = prepare_classifier_crops(array, (1.5, 1.5, 3.0), mask)
 
-        array, pancreas = scan_with_pancreas()
-        config = {'aggregation': 'mean', 'threshold': 0.35, 'checkpoint_sha256': 'x'}
-        with patch('app.classification._classifier', return_value=(Model(), config)):
-            result = classify_pdac(array, (1, 1, 2), pancreas)
-        self.assertEqual(seen['shape'][1:], (3, 224, 224))
-        self.assertEqual(seen['shape'][0], result['slices'])
-        self.assertAlmostEqual(result['probability'], 0.4, places=5)
-        self.assertEqual(result['threshold'], 0.35)
-        self.assertTrue(result['pdac'])
+        self.assertEqual(crops.shape[1:], (224, 224))
+        self.assertEqual(crops.dtype, np.uint8)
+        self.assertGreater(len(crops), 0)
+        self.assertEqual(len(crops), len(slices))
 
-    def test_empty_or_misaligned_pancreas_is_rejected(self):
-        array, pancreas = scan_with_pancreas()
-        with self.assertRaises(NoPancreasRegion):
-            classify_pdac(array, (1, 1, 2), np.zeros_like(pancreas))
-        with self.assertRaises(ValueError):
-            classify_pdac(array, (1, 1, 2), pancreas[:-1])
+    def test_patient_score_and_embedding_use_frozen_aggregation(self):
+        probabilities = np.asarray([0.2, 0.8], dtype=np.float32)
+        embeddings = np.zeros((2, 512), dtype=np.float32)
+        embeddings[0, 0] = 1
+        embeddings[1, 1] = 1
 
-    @unittest.skipUnless(model_available(), 'Classifier checkpoint is not installed locally')
-    def test_real_checkpoint_loads_and_returns_probability(self):
-        array, pancreas = scan_with_pancreas()
-        result = classify_pdac(array, (1, 1, 2), pancreas)
-        self.assertTrue(0 <= result['probability'] <= 1)
-        self.assertEqual(result['pdac'], result['probability'] >= result['threshold'])
+        result = aggregate_predictions(probabilities, embeddings, threshold=0.42)
+
+        self.assertAlmostEqual(result['pdac_probability'], 0.5)
+        self.assertEqual(result['predicted_class'], 'PDAC')
+        self.assertAlmostEqual(float(np.linalg.norm(result['embedding'])), 1.0, places=6)
+
+    def test_gradcam_crop_is_projected_to_original_scan(self):
+        array = np.zeros((5, 32, 40), dtype=np.float32)
+        mask = np.zeros_like(array, dtype=bool)
+        mask[2, 10:20, 14:24] = True
+        heatmap = np.ones((224, 224), dtype=np.float32)
+
+        projected, source_slice = project_gradcam_to_source(
+            array, (1.5, 1.5, 3.0), mask, 2, heatmap)
+
+        self.assertEqual(projected.shape, array.shape[1:])
+        self.assertEqual(source_slice, 2)
+        self.assertGreater(float(projected.max()), 0.9)
+        self.assertEqual(float(projected[0, 0]), 0.0)
 
 
-class FrozenConfigTests(unittest.TestCase):
-    def write_model(self, folder, **overrides):
-        config = {'crop_source': 'predicted_pancreas', 'classification_aggregation': 'mean',
-                  'classification_threshold': 0.42, 'checkpoint_sha256': 'abc', **overrides}
-        (Path(folder) / 'frozen_evaluation_config.json').write_text(json.dumps(config))
-        (Path(folder) / 'best.pt').write_bytes(b'not a checkpoint')
-
-    def test_reads_threshold_and_rejects_wrong_crop_source(self):
-        from app.pancreas import ModelUnavailable
-        with tempfile.TemporaryDirectory() as folder, \
-             patch.dict(os.environ, {'PANVISION_CLASSIFIER_DIR': folder}):
-            self.write_model(folder)
-            self.assertEqual(frozen_config()['threshold'], 0.42)
-            self.write_model(folder, crop_source='annotation_assisted')
-            with self.assertRaises(ModelUnavailable):
-                frozen_config()
-
-    def test_checkpoint_must_match_frozen_hash(self):
-        from app.classification import _classifier
-        from app.pancreas import ModelUnavailable
-        with tempfile.TemporaryDirectory() as folder, \
-             patch.dict(os.environ, {'PANVISION_CLASSIFIER_DIR': folder}):
-            self.write_model(folder)
-            _classifier.cache_clear()
-            self.addCleanup(_classifier.cache_clear)
-            with self.assertRaises(ModelUnavailable):
-                _classifier()
